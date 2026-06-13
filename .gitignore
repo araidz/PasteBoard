@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Swift Package Manager / Xcode build artifacts
+.build/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
+.swiftpm/xcode/xcuserdata/
+*.xcuserstate
+
+# Build output (the .app and .dmg are distributed via GitHub Releases, not committed)
+dist/
+
+# Claude Code local settings
+.claude/
