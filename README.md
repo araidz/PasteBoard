@@ -25,7 +25,7 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 
 - macOS 13 (Ventura) or later
 
-## Install (for everyone)
+## Install
 
 1. Go to the [**Releases**](https://github.com/araidz/PasteBoard/releases/latest) page.
 2. Download **`PasteBoard.dmg`**.
@@ -45,7 +45,7 @@ You only need to do this once. After that it opens normally and appears in your 
 > xattr -dr com.apple.quarantine /Applications/PasteBoard.app
 > ```
 
-## Build from source (for developers)
+## Build from source
 
 ```bash
 git clone https://github.com/araidz/PasteBoard.git
