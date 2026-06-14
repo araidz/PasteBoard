@@ -2,13 +2,22 @@
 
 A lightweight clipboard history manager for macOS that lives in your menu bar. Copy anything — text, code, images, files, or folders — and PasteBoard keeps a searchable history you can paste back at any time.
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshot.png" alt="PasteBoard clipboard history in the menu bar" width="360">
+  &nbsp;&nbsp;
+  <img src="docs/screenshot-selection.png" alt="Navigating clipboard history with the arrow keys" width="360">
+</p>
+
+> Sample data shown — your real clipboard never leaves your Mac.
+
 ## Features
 
 - 📋 **Clipboard history** for text, code, images, and files/folders
 - 🔍 **Instant search** across everything you've copied
 - 📌 **Pin** the items you reuse most so they stay at the top
 - 🖼️ **Image thumbnails** generated efficiently in the background
-- ⌨️ **Keyboard-driven** floating panel — open, search, and paste without the mouse
 - 🚀 **Launch at login** (optional)
 - 🪶 Native, lightweight menu bar app — no Electron, no clutter
 
