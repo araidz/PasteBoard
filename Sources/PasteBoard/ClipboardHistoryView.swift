@@ -229,20 +229,10 @@ struct ClipboardHistoryView: View {
         }
         // No fixed size — the window drives the size; these are sensible minimums.
         .frame(minWidth: 260, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
-        // Native menu material + a subtle dark dimming layer so the colorful
-        // desktop doesn't bleed through (per HIG guidance for vibrancy over
-        // bright backgrounds), making it read like the system menus.
-        .background(
-            ZStack {
-                VisualEffectView(material: .menu)
-                Color.black.opacity(0.22)
-            }
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5)
-        )
+        // Render on the same surface the system uses for menus so the panel matches
+        // their shade and translucency (Liquid Glass on macOS 26+, the classic menu
+        // material on older systems). See MenuSurface.
+        .modifier(MenuSurface())
     }
 
     private func toggleSearch() {
@@ -256,8 +246,31 @@ struct ClipboardHistoryView: View {
     }
 }
 
+/// The panel's background surface, matched to whatever the OS uses for real menus.
+///
+/// On macOS 26+ the panel is hosted inside an `NSGlassEffectView` (see AppDelegate),
+/// which provides the genuine Liquid Glass material, rounded corners, and shadow as
+/// a single unit — so here we add nothing and just let the content draw on it.
+/// Earlier releases that predate Liquid Glass fall back to the classic `.menu`
+/// vibrancy material with a clip and a hairline border.
+private struct MenuSurface: ViewModifier {
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 13, style: .continuous) }
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+        } else {
+            content
+                .background(VisualEffectView(material: .menu))
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
+        }
+    }
+}
+
 /// Native translucent menu material so the panel matches system menus
-/// (Wi-Fi / Control Center) instead of a flat, opaque background.
+/// (Wi-Fi / Control Center) instead of a flat, opaque background. Used as the
+/// pre-Liquid-Glass fallback in MenuSurface.
 private struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material = .menu
 
@@ -265,9 +278,9 @@ private struct VisualEffectView: NSViewRepresentable {
         let view = NSVisualEffectView()
         view.material = material
         view.blendingMode = .behindWindow
+        // Always render the active (not the dimmed inactive) material, like an open
+        // menu. Left un-emphasized so it matches a stock menu's exact shade.
         view.state = .active
-        // Emphasized reads closer to an active system menu's material.
-        view.isEmphasized = true
         return view
     }
 

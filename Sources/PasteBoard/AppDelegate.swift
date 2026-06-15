@@ -41,6 +41,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // How often the pasteboard is polled for new content (no system notification exists).
     private static let pollInterval: TimeInterval = 0.5
 
+    // Corner radius of the panel's glass surface, tuned to match macOS 26 menus.
+    private static let panelCornerRadius: CGFloat = 13
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
@@ -68,16 +71,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.hasShadow = true
         panel.setFrameAutosaveName("PasteBoardPanel")
 
-        panel.contentViewController = NSHostingController(
+        let hostingView = NSHostingView(
             rootView: ClipboardHistoryView(manager: clipboardManager, onItemSelected: { [weak self] in
-                self?.panel.orderOut(nil)
+                self?.hidePanel()
             })
         )
+        if #available(macOS 26.0, *) {
+            // Embed the SwiftUI content in the system's Liquid Glass surface. This
+            // is the exact view menus use, so the material, the rounded corners, and
+            // the drop shadow all match a real menu as a single unit — which also
+            // avoids the corner artifacts you get from hand-clipping a glass view.
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = Self.panelCornerRadius
+            glass.contentView = hostingView
+            panel.contentView = glass
+            // The glass surface casts its own correctly-rounded shadow. The window's
+            // automatic shadow is derived from the square content silhouette, so
+            // leaving it on traces a dark, slightly-square fringe around the rounded
+            // corners (it doesn't follow the radius). Turn it off so only the glass's
+            // own shadow remains — exactly like a real menu.
+            panel.hasShadow = false
+        } else {
+            hostingView.autoresizingMask = [.width, .height]
+            panel.contentView = hostingView
+        }
 
         // Dismiss the panel when the user clicks anywhere outside it.
         dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self = self, self.panel.isVisible else { return }
-            self.panel.orderOut(nil)
+            // Ignore clicks on our own status item. This monitor fires on mouse-down,
+            // before the button's action fires on mouse-up; if we hid the panel here,
+            // the action would then see it as hidden and immediately reopen it (the
+            // click would close-then-reopen instead of just closing). Skipping the
+            // status item lets togglePanel be the single source of truth there.
+            if let button = self.statusItem.button, let win = button.window {
+                let frameInScreen = win.convertToScreen(button.convert(button.bounds, to: nil))
+                if frameInScreen.contains(NSEvent.mouseLocation) { return }
+            }
+            self.hidePanel()
         }
 
         // Listen for clipboard captures to blink the menu bar icon
@@ -135,7 +166,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // pastes the most recent entry even when nothing is selected yet.
                 if let item = self.clipboardManager.selectedItem ?? self.clipboardManager.filteredItems.first {
                     self.clipboardManager.pasteItem(item)
-                    self.panel.orderOut(nil)
+                    self.hidePanel()
                     return nil
                 }
                 return event
@@ -146,12 +177,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func togglePanel() {
-        guard let button = statusItem.button else { return }
-
         if panel.isVisible {
-            panel.orderOut(nil)
-            return
+            hidePanel()
+        } else {
+            showPanel()
         }
+    }
+
+    /// Open the panel beneath the menu bar icon.
+    private func showPanel() {
+        guard let button = statusItem.button else { return }
 
         // Don't pre-select a row — the panel opens with nothing highlighted, like a
         // native menu. Hover or the first arrow-key press establishes the selection.
@@ -160,6 +195,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// Close the panel. All dismissal paths (toggle, click-outside, paste) funnel
+    /// through here.
+    private func hidePanel() {
+        panel.orderOut(nil)
     }
 
     /// Place the panel just beneath the menu bar icon, kept on screen.
