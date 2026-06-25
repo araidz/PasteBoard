@@ -91,7 +91,16 @@ class ClipboardManager: ObservableObject {
     @Published var selectedItemID: UUID?
 
     private var lastChangeCount: Int = 0
-    private let maxItems = 200            // rolling window applies to unpinned items only
+    // Rolling-window size for unpinned items, user-adjustable from the menu and
+    // persisted across launches. Changing it re-trims immediately.
+    @Published var maxItems: Int = (UserDefaults.standard.object(forKey: "maxItems") as? Int) ?? 200 {
+        didSet {
+            guard maxItems != oldValue else { return }
+            UserDefaults.standard.set(maxItems, forKey: "maxItems")
+            trimUnpinned()
+            saveItems()
+        }
+    }
     private let storageURL: URL          // unpinned history
     private let pinnedStorageURL: URL    // pinned items, persisted separately
     private let imageStorageURL: URL

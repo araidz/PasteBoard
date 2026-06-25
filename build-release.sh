@@ -13,8 +13,8 @@ cd "$(dirname "$0")"
 
 APP_NAME="PasteBoard"
 BUNDLE_ID="com.local.pasteboard"
-VERSION="${1:-1.1}"
-BUILD="${2:-2}"
+VERSION="${1:-1.2}"
+BUILD="${2:-3}"
 
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
@@ -32,7 +32,7 @@ echo "▸ Building release binary…"
 xcrun swift build -c release
 BIN="$(xcrun swift build -c release --show-bin-path)/$APP_NAME"
 
-echo "▸ Assembling $APP…"
+echo "▸ Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
@@ -80,7 +80,7 @@ xattr -cr "$APP"
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 
-echo "▸ Building $DMG…"
+echo "▸ Building ${DMG}…"
 STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/$APP_NAME.app"
 rm -f "$DMG"

@@ -121,6 +121,11 @@ struct ClipboardHistoryView: View {
                 .help("Clear all (keeps pinned)")
                 // Overflow menu — launch at login + quit, consolidated to save space.
                 Menu {
+                    Picker("History Limit", selection: $manager.maxItems) {
+                        ForEach([50, 100, 200, 500, 1000], id: \.self) { limit in
+                            Text("\(limit) items").tag(limit)
+                        }
+                    }
                     Toggle("Launch at Login", isOn: $launchAtLogin)
                     Divider()
                     Button("Quit PasteBoard") { NSApplication.shared.terminate(nil) }
