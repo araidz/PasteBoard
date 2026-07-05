@@ -87,94 +87,53 @@ private struct ThumbnailView: View {
 
 struct ClipboardHistoryView: View {
     @ObservedObject var manager: ClipboardManager
-    var onItemSelected: () -> Void = {}
-    @State private var isSearching = false
-    @State private var launchAtLogin = LoginItem.isEnabled
+    var onCommit: (ClipboardItem) -> Void = { _ in }
+    var onCommitPath: (String) -> Void = { _ in }
     @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             // Header
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Text("PasteBoard")
                     .font(.headline)
                     .fontWeight(.semibold)
                 Spacer()
-                // Reflects the list actually shown below (matches an active search).
-                Text("\(manager.filteredItems.count) items")
-                    .font(.caption)
+                // Count badge — reflects the list shown (matches an active search).
+                Text("\(manager.filteredItems.count)")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
-                // Reveal / hide the search field.
-                Button(action: toggleSearch) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(isSearching ? .accentColor : .secondary)
-                        .font(.system(size: 14))
-                }
-                .buttonStyle(.plain)
-                .help(isSearching ? "Hide search" : "Search")
-                Button(action: { manager.clearAll() }) {
-                    Image(systemName: "trash")
-                        .foregroundColor(.secondary)
-                        .font(.system(size: 14))
-                }
-                .buttonStyle(.plain)
-                .help("Clear all (keeps pinned)")
-                // Overflow menu — launch at login + quit, consolidated to save space.
-                Menu {
-                    Picker("History Limit", selection: $manager.maxItems) {
-                        ForEach([50, 100, 200, 500, 1000], id: \.self) { limit in
-                            Text("\(limit) items").tag(limit)
-                        }
-                    }
-                    Toggle("Launch at Login", isOn: $launchAtLogin)
-                    Divider()
-                    Button("Quit PasteBoard") { NSApplication.shared.terminate(nil) }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.caption)
-                        // The circle variant reads larger than the plain glyphs at
-                        // the same size; shrink the symbol scale to match them.
-                        .imageScale(.small)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                // Match the plain header icons — borderlessButton otherwise tints
-                // the label with its own control color.
-                .foregroundStyle(.secondary)
-                .tint(.secondary)
-                .help("More")
-                .onChange(of: launchAtLogin) { newValue in
-                    LoginItem.setEnabled(newValue)
-                }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 2)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
-            // Search — revealed on demand by the magnifying-glass button.
-            if isSearching {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                        .font(.caption)
-                    TextField("Search...", text: $manager.searchText)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .focused($searchFocused)
-                    Button(action: toggleSearch) {
+            // Search — always visible; focused automatically when the panel opens.
+            HStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                TextField("Search...", text: $manager.searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .focused($searchFocused)
+                if !manager.searchText.isEmpty {
+                    Button(action: { manager.searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
                             .font(.caption)
                     }
                     .buttonStyle(.plain)
-                    .help("Close search")
+                    .help("Clear search")
                 }
-                .padding(8)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .cornerRadius(6)
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
             }
+            .padding(8)
+            .background(Color(nsColor: .controlBackgroundColor))
+            .cornerRadius(6)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 8)
 
             Divider()
 
@@ -192,6 +151,11 @@ struct ClipboardHistoryView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
+                    if manager.searchText.isEmpty {
+                        Text("Press ⌥⌘V anywhere to open")
+                            .font(.caption2)
+                            .foregroundColor(Color.secondary.opacity(0.7))
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -199,20 +163,18 @@ struct ClipboardHistoryView: View {
                 ScrollViewReader { proxy in
                     ScrollView {
                         LazyVStack(spacing: 1) {
-                            ForEach(manager.filteredItems) { item in
+                            ForEach(Array(manager.filteredItems.enumerated()), id: \.element.id) { index, item in
+                                if let label = sectionLabel(at: index) {
+                                    sectionHeader(label)
+                                }
                                 ClipboardItemRow(
                                     item: item,
                                     isSelected: manager.selectedItemID == item.id,
-                                    onPaste: {
-                                        manager.pasteItem(item)
-                                        onItemSelected()   // close window on paste
-                                    },
+                                    shortcutIndex: index < 9 ? index + 1 : nil,
+                                    onPaste: { onCommit(item) },
                                     onDelete: { manager.deleteItem(item) },
                                     onTogglePin: { manager.togglePin(item) },
-                                    onPastePath: { path in
-                                        manager.pasteSubPath(path)
-                                        onItemSelected()   // close window on paste
-                                    }
+                                    onPastePath: { path in onCommitPath(path) }
                                 )
                                 .equatable()
                                 .id(item.id)
@@ -231,6 +193,27 @@ struct ClipboardHistoryView: View {
                     }
                 }
             }
+            Divider()
+            // Footer — keyboard hints + Clear all (the one history action kept here).
+            HStack(spacing: 0) {
+                Text("⏎ paste · ⌘1–9 quick · esc close")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button(action: { manager.clearAll() }) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "trash")
+                        Text("Clear all")
+                    }
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Clear all (keeps pinned)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
         }
         // No fixed size — the window drives the size; these are sensible minimums.
         .frame(minWidth: 260, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
@@ -238,17 +221,32 @@ struct ClipboardHistoryView: View {
         // their shade and translucency (Liquid Glass on macOS 26+, the classic menu
         // material on older systems). See MenuSurface.
         .modifier(MenuSurface())
-    }
-
-    private func toggleSearch() {
-        isSearching.toggle()
-        if isSearching {
+        .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = true
-        } else {
-            manager.searchText = ""
-            searchFocused = false
         }
     }
+
+    // Section label for the row at `index`: "Pinned" atop pinned items, "Recent"
+    // at the first unpinned item. nil elsewhere (no header).
+    private func sectionLabel(at index: Int) -> String? {
+        let items = manager.filteredItems
+        if index == 0 { return items[index].pinned ? "Pinned" : "Recent" }
+        if !items[index].pinned && items[index - 1].pinned { return "Recent" }
+        return nil
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
 }
 
 /// The panel's background surface, matched to whatever the OS uses for real menus.
@@ -496,6 +494,8 @@ private struct RowActionButton: View {
 struct ClipboardItemRow: View, Equatable {
     let item: ClipboardItem
     let isSelected: Bool
+    // 1–9 for the first nine rows → shows a ⌘N quick-paste hint. nil otherwise.
+    var shortcutIndex: Int? = nil
     let onPaste: () -> Void
     let onDelete: () -> Void
     let onTogglePin: () -> Void
@@ -507,7 +507,7 @@ struct ClipboardItemRow: View, Equatable {
     // `isSelected` lets SwiftUI skip re-rendering every visible row when one pin /
     // delete mutates the list; only the row that actually changed re-renders.
     static func == (lhs: ClipboardItemRow, rhs: ClipboardItemRow) -> Bool {
-        lhs.item == rhs.item && lhs.isSelected == rhs.isSelected
+        lhs.item == rhs.item && lhs.isSelected == rhs.isSelected && lhs.shortcutIndex == rhs.shortcutIndex
     }
 
     // Hover is local so hovering one row never re-renders the rest of the list.
@@ -570,6 +570,7 @@ struct ClipboardItemRow: View, Equatable {
             }
 
             Spacer(minLength: 0)
+            shortcutBadge
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -638,6 +639,7 @@ struct ClipboardItemRow: View, Equatable {
             }
 
             Spacer(minLength: 0)
+            shortcutBadge
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 5)
@@ -676,6 +678,16 @@ struct ClipboardItemRow: View, Equatable {
         .frame(width: 18)
         .opacity(isHovered ? 1 : 0)
         .allowsHitTesting(isHovered)
+    }
+
+    /// The ⌘1–9 quick-paste hint on the trailing edge of the first nine rows.
+    @ViewBuilder
+    private var shortcutBadge: some View {
+        if let n = shortcutIndex {
+            Text("⌘\(n)")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundColor(secondaryColor)
+        }
     }
 
     private var highlightBackground: some View {

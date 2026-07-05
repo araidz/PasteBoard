@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import ServiceManagement
+import Carbon.HIToolbox
 
 /// Wraps the macOS 13+ login-item API so the app can launch itself at startup.
 enum LoginItem {
@@ -30,13 +31,16 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var panel: NSPanel!
     var clipboardManager = ClipboardManager()
     var timer: Timer?
     var keyMonitor: Any?
     var dismissMonitor: Any?
+    var hotKey: HotKey?
+    // The app that was frontmost when the panel opened — where auto-paste sends the item.
+    var capturedApp: NSRunningApplication?
 
     // How often the pasteboard is polled for new content (no system notification exists).
     private static let pollInterval: TimeInterval = 0.5
@@ -49,9 +53,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "PasteBoard")
-            button.target = self
-            button.action = #selector(togglePanel)
         }
+        // Clicking the icon shows a native menu of options; the floating history
+        // is opened by the ⌥⌘V hotkey (or the menu's "Open Clipboard History").
+        statusItem.menu = buildStatusMenu()
 
         // Borderless, floating, user-resizable panel — no title bar at all.
         panel = FloatingPanel(
@@ -72,9 +77,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         panel.setFrameAutosaveName("PasteBoardPanel")
 
         let hostingView = NSHostingView(
-            rootView: ClipboardHistoryView(manager: clipboardManager, onItemSelected: { [weak self] in
-                self?.hidePanel()
-            })
+            rootView: ClipboardHistoryView(
+                manager: clipboardManager,
+                onCommit: { [weak self] in self?.commit($0) },
+                onCommitPath: { [weak self] in self?.commitPath($0) }
+            )
         )
         if #available(macOS 26.0, *) {
             // Embed the SwiftUI content in the system's Liquid Glass surface. This
@@ -122,6 +129,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startMonitoring()
         installKeyMonitor()
 
+        // ⌥⌘V opens the history over whatever app you're in (needs no permission).
+        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
+            self?.toggle(nearCursor: true)
+        }
+
         // Hide dock icon — menu bar only
         NSApp.setActivationPolicy(.accessory)
 
@@ -154,6 +166,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.panel.isVisible else { return event }
+            // ⌘1–9 pastes the Nth item in the displayed list. Layout-robust via the
+            // typed character rather than a physical key code.
+            if event.modifierFlags.contains(.command),
+               let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+               (1...9).contains(digit) {
+                let list = self.clipboardManager.filteredItems
+                if digit <= list.count { self.commit(list[digit - 1]) }
+                return nil   // consume ⌘1–9 either way so it never leaks to the app
+            }
             switch event.keyCode {
             case 125: // down arrow
                 self.clipboardManager.moveSelection(by: 1)
@@ -165,36 +186,157 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 // Use the highlighted row, or fall back to the top item so Return
                 // pastes the most recent entry even when nothing is selected yet.
                 if let item = self.clipboardManager.selectedItem ?? self.clipboardManager.filteredItems.first {
-                    self.clipboardManager.pasteItem(item)
-                    self.hidePanel()
+                    self.commit(item)
                     return nil
                 }
                 return event
+            case 53: // esc
+                self.hidePanel()
+                return nil
             default:
                 return event
             }
         }
     }
 
-    @objc func togglePanel() {
-        if panel.isVisible {
-            hidePanel()
-        } else {
-            showPanel()
+    // MARK: - Menu-bar menu
+
+    // Tags for the items whose state we refresh each time the menu opens.
+    private enum MenuTag: Int { case launchAtLogin = 1, autoPaste = 2, accessibility = 3, historyLimit = 4 }
+
+    private func buildStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.delegate = self
+
+        let header = NSMenuItem(title: "PasteBoard", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        menu.addItem(.separator())
+
+        addItem(to: menu, "Open Clipboard History (⌥⌘V)", #selector(menuOpenHistory))
+        menu.addItem(.separator())
+
+        addItem(to: menu, "Launch at Login", #selector(menuToggleLaunchAtLogin), tag: MenuTag.launchAtLogin.rawValue)
+        addItem(to: menu, "Paste Directly Into App", #selector(menuToggleAutoPaste), tag: MenuTag.autoPaste.rawValue)
+        addItem(to: menu, "Enable Accessibility (for auto-paste)…", #selector(menuEnableAccessibility), tag: MenuTag.accessibility.rawValue)
+
+        let limitItem = NSMenuItem(title: "History Limit", action: nil, keyEquivalent: "")
+        limitItem.tag = MenuTag.historyLimit.rawValue
+        let limitMenu = NSMenu()
+        for limit in [50, 100, 200, 500, 1000] {
+            addItem(to: limitMenu, "\(limit) items", #selector(menuSetHistoryLimit(_:)), tag: limit)
+        }
+        limitItem.submenu = limitMenu
+        menu.addItem(limitItem)
+
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Quit PasteBoard", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        return menu
+    }
+
+    @discardableResult
+    private func addItem(to menu: NSMenu, _ title: String, _ action: Selector, tag: Int = 0) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        item.target = self
+        item.tag = tag
+        menu.addItem(item)
+        return item
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.item(withTag: MenuTag.launchAtLogin.rawValue)?.state = LoginItem.isEnabled ? .on : .off
+        menu.item(withTag: MenuTag.autoPaste.rawValue)?.state = autoPasteEnabled ? .on : .off
+        if let access = menu.item(withTag: MenuTag.accessibility.rawValue) {
+            let trusted = AutoPaste.isTrusted
+            access.state = trusted ? .on : .off
+            access.title = trusted ? "Accessibility Enabled" : "Enable Accessibility (for auto-paste)…"
+        }
+        if let submenu = menu.item(withTag: MenuTag.historyLimit.rawValue)?.submenu {
+            for item in submenu.items { item.state = (item.tag == clipboardManager.maxItems) ? .on : .off }
         }
     }
 
-    /// Open the panel beneath the menu bar icon.
-    private func showPanel() {
-        guard let button = statusItem.button else { return }
+    @objc private func menuOpenHistory() { toggle(nearCursor: false) }
+    @objc private func menuToggleLaunchAtLogin() { LoginItem.setEnabled(!LoginItem.isEnabled) }
+    @objc private func menuToggleAutoPaste() { autoPasteEnabled.toggle() }
+    @objc private func menuEnableAccessibility() { AutoPaste.requestPermission() }
+    @objc private func menuSetHistoryLimit(_ sender: NSMenuItem) { clipboardManager.maxItems = sender.tag }
 
-        // Don't pre-select a row — the panel opens with nothing highlighted, like a
-        // native menu. Hover or the first arrow-key press establishes the selection.
+    /// Show or hide the history. `nearCursor` positions it at the pointer (hotkey)
+    /// instead of under the menu-bar icon (click).
+    func toggle(nearCursor: Bool) {
+        if panel.isVisible {
+            hidePanel()
+        } else {
+            // Capture the frontmost app before we activate ourselves — that's the
+            // app auto-paste will send the picked item back into.
+            capturedApp = NSWorkspace.shared.frontmostApplication
+            showPanel(nearCursor: nearCursor)
+        }
+    }
+
+    // MARK: - Commit (paste)
+
+    /// Whether to auto-paste into the previous app (default on). Persisted.
+    var autoPasteEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "autoPasteEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "autoPasteEnabled") }
+    }
+
+    /// Put an item on the clipboard, close the panel, and (if permitted) paste it
+    /// straight back into the app you came from.
+    func commit(_ item: ClipboardItem) {
+        clipboardManager.pasteItem(item)
+        finishCommit()
+    }
+
+    /// Commit a single member of a multi-file group.
+    func commitPath(_ path: String) {
+        clipboardManager.pasteSubPath(path)
+        finishCommit()
+    }
+
+    private func finishCommit() {
+        let target = capturedApp
+        hidePanel()
+        let targetIsSelf = target?.bundleIdentifier == Bundle.main.bundleIdentifier
+        let action = AutoPaste.action(autoPasteEnabled: autoPasteEnabled,
+                                      trusted: AutoPaste.isTrusted,
+                                      targetIsSelf: targetIsSelf)
+        if action == .autoPaste {
+            AutoPaste.paste(into: target)
+        }
+    }
+
+    /// Open the panel — under the menu-bar icon, or at the pointer for the hotkey.
+    private func showPanel(nearCursor: Bool) {
+        // Don't pre-select a row — hover or the first arrow key establishes it.
         clipboardManager.selectedItemID = nil
-        positionPanel(below: button)
+        if nearCursor {
+            positionPanelAtCursor()
+        } else if let button = statusItem.button {
+            positionPanel(below: button)
+        }
         panel.makeKeyAndOrderFront(nil)
         panel.orderFrontRegardless()
         NSApp.activate(ignoringOtherApps: true)
+        // Open fresh: clear any prior query and focus the search field.
+        DispatchQueue.main.async {
+            self.clipboardManager.searchText = ""
+            NotificationCenter.default.post(name: .panelDidShow, object: nil)
+        }
+    }
+
+    /// Place the panel near the mouse pointer, clamped on screen.
+    private func positionPanelAtCursor() {
+        let mouse = NSEvent.mouseLocation
+        var origin = NSPoint(x: mouse.x - 8, y: mouse.y - panel.frame.height + 8)
+        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
+        if let visible = screen?.visibleFrame {
+            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - panel.frame.width - 8)
+            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - panel.frame.height - 8)
+        }
+        panel.setFrameOrigin(origin)
     }
 
     /// Close the panel. All dismissal paths (toggle, click-outside, paste) funnel
@@ -238,4 +380,5 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 // NOTE: reconstructed — notification name used to signal a capture.
 extension Notification.Name {
     static let clipboardDidCapture = Notification.Name("clipboardDidCapture")
+    static let panelDidShow = Notification.Name("panelDidShow")
 }

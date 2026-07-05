@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "PasteBoard",
             path: "Sources/PasteBoard"
+        ),
+        .testTarget(
+            name: "PasteBoardTests",
+            dependencies: ["PasteBoard"],
+            path: "Tests/PasteBoardTests"
         )
     ]
 )

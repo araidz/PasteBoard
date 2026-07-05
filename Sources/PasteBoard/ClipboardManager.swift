@@ -310,9 +310,6 @@ class ClipboardManager: ObservableObject {
         if let dupIndex = items.firstIndex(where: { isContentDuplicate($0, newItem) }) {
             let dup = items[dupIndex]
             if dup.pinned { newItem.pinned = true }
-            if let oldImage = dup.imagePath, oldImage != newItem.imagePath {
-                removeFiles([oldImage])
-            }
             items.remove(at: dupIndex)
         }
         items.insert(newItem, at: 0)

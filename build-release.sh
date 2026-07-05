@@ -75,9 +75,17 @@ PLIST
 echo "▸ Stripping debug symbols…"
 strip -rSTx "$APP/Contents/MacOS/$APP_NAME"
 
-echo "▸ Signing (ad-hoc)…"
+# Prefer a stable self-signed identity (see make-signing-cert.sh) so the
+# Accessibility permission survives rebuilds; fall back to ad-hoc otherwise.
+SIGN_IDENTITY="${SIGN_IDENTITY:-PasteBoard Self-Signed}"
 xattr -cr "$APP"
-codesign --force --deep --sign - "$APP"
+if security find-identity -p codesigning | grep -qF "$SIGN_IDENTITY"; then
+  echo "▸ Signing with \"$SIGN_IDENTITY\"…"
+  codesign --force --deep --sign "$SIGN_IDENTITY" "$APP"
+else
+  echo "▸ Signing (ad-hoc — run ./make-signing-cert.sh once so Accessibility persists)…"
+  codesign --force --deep --sign - "$APP"
+fi
 codesign --verify --deep --strict "$APP"
 
 echo "▸ Building ${DMG}…"
