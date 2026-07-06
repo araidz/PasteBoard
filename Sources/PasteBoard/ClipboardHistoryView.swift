@@ -59,13 +59,13 @@ enum ThumbnailCache {
 /// downsampled image is ready so scrolling never blocks on a disk decode.
 private struct ThumbnailView: View {
     let path: String
+    var size: CGFloat = 40
     @State private var image: NSImage?
 
     var body: some View {
         thumbnail
-            .frame(width: 40, height: 40)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
             .onAppear {
                 guard image == nil else { return }
                 ThumbnailCache.load(path: path) { loaded in image = loaded }
@@ -79,7 +79,7 @@ private struct ThumbnailView: View {
                 .resizable()
                 .aspectRatio(contentMode: .fill)
         } else {
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .fill(Color.secondary.opacity(0.15))
         }
     }
@@ -520,6 +520,52 @@ struct ClipboardItemRow: View, Equatable {
     private var contentColor: Color { isHighlighted ? .white : .primary }
     private var secondaryColor: Color { isHighlighted ? Color.white.opacity(0.85) : .secondary }
 
+    // Uniform size for the leading icon tile / thumbnail.
+    static let iconSize: CGFloat = 28
+
+    /// The leading tile: a thumbnail for images, a colour swatch for hex colours,
+    /// otherwise a colour-coded rounded square with a category glyph.
+    @ViewBuilder
+    private var iconTile: some View {
+        if let path = thumbnailPath {
+            ThumbnailView(path: path, size: Self.iconSize)
+        } else if let swatch = swatchColor {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(swatch)
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.white.opacity(0.25)))
+                .frame(width: Self.iconSize, height: Self.iconSize)
+        } else {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(iconTint.gradient)
+                .frame(width: Self.iconSize, height: Self.iconSize)
+                .overlay(
+                    Image(systemName: iconName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.white)
+                )
+        }
+    }
+
+    /// Tile background colour, keyed to the content/file category.
+    private var iconTint: Color {
+        switch item.type {
+        case .image: return Color(nsColor: .systemTeal)
+        case .folder: return Color(nsColor: .systemOrange)
+        case .file: return Self.tint(forSymbol: fileIconName(forPath: item.filePaths?.first))
+        case .text, .code:
+            if let app = item.sourceApp, Self.isTerminalApp(app) { return Color(nsColor: .systemGray) }
+            let text = (item.textContent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if Self.looksLikeURL(text) || Self.looksLikeEmail(text) { return Color(nsColor: .systemBlue) }
+            return item.type == .code ? Color(nsColor: .systemIndigo) : Color(nsColor: .systemGray)
+        }
+    }
+
+    /// A lone hex-colour string renders as a colour swatch tile.
+    private var swatchColor: Color? {
+        guard item.type == .text || item.type == .code else { return nil }
+        return Self.hexColor((item.textContent ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// Code snippet preview that keeps the source's formatting (newlines and
     /// indentation), capped so very long snippets don't render huge strings.
     private var codePreview: String {
@@ -558,10 +604,7 @@ struct ClipboardItemRow: View, Equatable {
         HStack(spacing: 5) {
             actionColumn
 
-            // Type icon — reflects the kind of content / file.
-            Image(systemName: iconName)
-                .frame(width: 22)
-                .foregroundColor(secondaryColor)
+            iconTile
 
             // Content preview
             VStack(alignment: .leading, spacing: 2) {
@@ -614,9 +657,14 @@ struct ClipboardItemRow: View, Equatable {
             .buttonStyle(.plain)
             .help(expanded ? "Collapse" : "Expand")
 
-            Image(systemName: item.type == .folder ? "folder" : "doc.on.doc")
-                .frame(width: 22)
-                .foregroundColor(secondaryColor)
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color(nsColor: .systemOrange).gradient)
+                .frame(width: Self.iconSize, height: Self.iconSize)
+                .overlay(
+                    Image(systemName: item.type == .folder ? "folder.fill" : "doc.on.doc.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.white)
+                )
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -737,8 +785,8 @@ struct ClipboardItemRow: View, Equatable {
         }
         let text = (item.textContent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if Self.looksLikeURL(text) { return "link" }
-        if Self.looksLikeEmail(text) { return "envelope" }
-        return item.type == .code ? "chevron.left.forwardslash.chevron.right" : "doc.text"
+        if Self.looksLikeEmail(text) { return "envelope.fill" }
+        return item.type == .code ? "chevron.left.forwardslash.chevron.right" : "text.alignleft"
     }
 
     /// Loose match for terminal emulators by their app name.
@@ -764,43 +812,77 @@ struct ClipboardItemRow: View, Equatable {
         return parts.count == 2 && parts[1].contains(".")
     }
 
+    /// A lone hex-colour string (`#RGB` / `#RRGGBB`) → its Color, for a swatch tile.
+    static func hexColor(_ s: String) -> Color? {
+        guard s.hasPrefix("#") else { return nil }
+        let hex = s.dropFirst()
+        guard hex.count == 3 || hex.count == 6, hex.allSatisfy(\.isHexDigit) else { return nil }
+        let full = hex.count == 3 ? hex.map { "\($0)\($0)" }.joined() : String(hex)
+        guard let v = UInt64(full, radix: 16) else { return nil }
+        return Color(red: Double((v >> 16) & 0xff) / 255,
+                     green: Double((v >> 8) & 0xff) / 255,
+                     blue: Double(v & 0xff) / 255)
+    }
+
+    /// Category colour for a resolved file glyph, so file tiles are colour-coded.
+    static func tint(forSymbol symbol: String) -> Color {
+        switch symbol {
+        case "photo": return Color(nsColor: .systemTeal)
+        case "doc.richtext": return Color(nsColor: .systemRed)
+        case "doc.zipper": return Color(nsColor: .systemBrown)
+        case "tablecells": return Color(nsColor: .systemGreen)
+        case "rectangle.on.rectangle": return Color(nsColor: .systemOrange)
+        case "music.note", "paintpalette": return Color(nsColor: .systemPink)
+        case "film": return Color(nsColor: .systemPurple)
+        case "chevron.left.forwardslash.chevron.right", "curlybraces": return Color(nsColor: .systemIndigo)
+        case "book", "textformat": return Color(nsColor: .systemBrown)
+        case "app", "person.crop.square", "doc.plaintext", "doc.text": return Color(nsColor: .systemBlue)
+        case "calendar": return Color(nsColor: .systemRed)
+        default: return Color(nsColor: .systemGray)
+        }
+    }
+
     @ViewBuilder
     var contentPreview: some View {
-        // A photo (copied image or a single image file) previews as a thumbnail
-        // instead of showing its filename. The thumbnail loads asynchronously.
-        if let path = thumbnailPath {
-            ThumbnailView(path: path)
-        } else {
-            switch item.type {
-            case .text:
-                Text(item.previewText)
-                    .font(.system(size: 12))
-                    .foregroundColor(contentColor)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            case .code:
-                // Show the snippet in its source format: monospaced, preserving
-                // indentation and line breaks (a few lines as a preview).
-                Text(codePreview)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundColor(contentColor)
-                    .lineLimit(5)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            case .image:
-                Text("[Image]")
-                    .font(.system(size: 12))
-                    .foregroundColor(secondaryColor)
-            case .file, .folder:
-                // Show the filename prominently rather than the full path.
-                Text(item.previewText)
-                    .font(.system(size: 12))
-                    .fontWeight(.medium)
-                    .foregroundColor(contentColor)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        switch item.type {
+        case .text:
+            Text(item.previewText)
+                .font(.system(size: 12))
+                .foregroundColor(contentColor)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .code:
+            codeText
+        case .image:
+            Text("Image")
+                .font(.system(size: 12))
+                .foregroundColor(contentColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        case .file, .folder:
+            Text(item.previewText)
+                .font(.system(size: 12))
+                .fontWeight(.medium)
+                .foregroundColor(contentColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Syntax-highlighted on a normal row; plain white when the row is accented
+    /// (coloured tokens would fight the accent background).
+    @ViewBuilder
+    private var codeText: some View {
+        Group {
+            if isHighlighted {
+                Text(codePreview).foregroundColor(.white)
+            } else {
+                Text(SyntaxHighlighter.highlight(codePreview))
             }
         }
+        .font(.system(size: 11, design: .monospaced))
+        .lineLimit(6)
+        .multilineTextAlignment(.leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

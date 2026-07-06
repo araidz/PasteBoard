@@ -121,4 +121,21 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(AutoPaste.action(autoPasteEnabled: true, trusted: false, targetIsSelf: false), .copyOnly)
         XCTAssertEqual(AutoPaste.action(autoPasteEnabled: true, trusted: true, targetIsSelf: true), .copyOnly)
     }
+
+    // MARK: - Syntax highlighting
+
+    func testSyntaxTokenizerClassifiesSpans() {
+        let code = "func greet() {\n    let n = 42 // count\n    return \"hi\"\n}"
+        let kinds = SyntaxHighlighter.tokens(in: code).map(\.kind)
+        XCTAssertTrue(kinds.contains(.keyword), "func/let/return should be keywords")
+        XCTAssertTrue(kinds.contains(.number), "42 should be a number")
+        XCTAssertTrue(kinds.contains(.comment), "// count should be a comment")
+        XCTAssertTrue(kinds.contains(.string), "\"hi\" should be a string")
+    }
+
+    func testSyntaxTokenizerLeavesProseAlone() {
+        // No code tokens in ordinary prose (the number is the only classified span).
+        let kinds = SyntaxHighlighter.tokens(in: "just some words here").map(\.kind)
+        XCTAssertTrue(kinds.isEmpty)
+    }
 }
