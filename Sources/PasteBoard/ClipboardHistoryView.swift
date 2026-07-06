@@ -172,8 +172,7 @@ struct ClipboardHistoryView: View {
                                     isSelected: manager.selectedItemID == item.id,
                                     shortcutIndex: index < 9 ? index + 1 : nil,
                                     onPaste: { onCommit(item) },
-                                    onDelete: { manager.deleteItem(item) },
-                                    onTogglePin: { manager.togglePin(item) },
+                                    onSelect: { manager.selectedItemID = item.id },
                                     onPastePath: { path in onCommitPath(path) }
                                 )
                                 .equatable()
@@ -196,7 +195,7 @@ struct ClipboardHistoryView: View {
             Divider()
             // Footer — keyboard hints + Clear all (the one history action kept here).
             HStack(spacing: 0) {
-                Text("⏎ paste · ⌘1–9 quick · esc close")
+                Text("⏎ paste · ⌘P pin · ⌘⌫ delete · esc close")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                 Spacer()
@@ -464,41 +463,13 @@ private struct GroupMemberRow: View {
     }
 }
 
-/// A small icon button used for the per-row pin / delete actions, with its own
-/// hover affordance so the targets feel responsive.
-private struct RowActionButton: View {
-    let systemName: String
-    let tint: Color
-    let help: String
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(tint)
-                .frame(width: 18, height: 18)
-                .background(
-                    RoundedRectangle(cornerRadius: 5)
-                        .fill(hovering ? Color.primary.opacity(0.12) : Color.clear)
-                )
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help(help)
-        .onHover { hovering = $0 }
-    }
-}
-
 struct ClipboardItemRow: View, Equatable {
     let item: ClipboardItem
     let isSelected: Bool
     // 1–9 for the first nine rows → shows a ⌘N quick-paste hint. nil otherwise.
     var shortcutIndex: Int? = nil
     let onPaste: () -> Void
-    let onDelete: () -> Void
-    let onTogglePin: () -> Void
+    var onSelect: () -> Void = {}
     // Paste a single member of a multi-file group. Unused for non-group rows.
     var onPastePath: (String) -> Void = { _ in }
 
@@ -510,11 +481,10 @@ struct ClipboardItemRow: View, Equatable {
         lhs.item == rhs.item && lhs.isSelected == rhs.isSelected && lhs.shortcutIndex == rhs.shortcutIndex
     }
 
-    // Hover is local so hovering one row never re-renders the rest of the list.
-    @State private var isHovered = false
     // Multi-file groups can be expanded to reveal their members.
     @State private var expanded = false
-    private var isHighlighted: Bool { isHovered || isSelected }
+    // Only keyboard/click selection highlights a row — never hover.
+    private var isHighlighted: Bool { isSelected }
 
     // On an accent-highlighted row, text/icons flip to white like a native menu item.
     private var contentColor: Color { isHighlighted ? .white : .primary }
@@ -602,8 +572,6 @@ struct ClipboardItemRow: View, Equatable {
 
     private var singleRow: some View {
         HStack(spacing: 5) {
-            actionColumn
-
             iconTile
 
             // Content preview
@@ -619,14 +587,9 @@ struct ClipboardItemRow: View, Equatable {
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click pastes and closes. A single click does nothing — only
-        // hover changes the highlight.
-        .onTapGesture(count: 2) {
-            onPaste()
-        }
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        // Double-click pastes; single click selects (highlights) the row.
+        .onTapGesture(count: 2) { onPaste() }
+        .onTapGesture { onSelect() }
     }
 
     // MARK: - Multi-file group
@@ -644,8 +607,6 @@ struct ClipboardItemRow: View, Equatable {
 
     private var groupHeader: some View {
         HStack(spacing: 5) {
-            actionColumn
-
             // Disclosure chevron — always visible; toggles the member list.
             Button(action: { withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() } }) {
                 Image(systemName: expanded ? "chevron.down" : "chevron.right")
@@ -693,40 +654,12 @@ struct ClipboardItemRow: View, Equatable {
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click the header pastes the whole group.
-        .onTapGesture(count: 2) {
-            onPaste()
-        }
-        .onHover { hovering in
-            isHovered = hovering
-        }
+        // Double-click pastes the whole group; single click selects it.
+        .onTapGesture(count: 2) { onPaste() }
+        .onTapGesture { onSelect() }
     }
 
     // MARK: - Shared pieces
-
-    /// Leading pin/delete column — reserved space so the row never reflows;
-    /// the buttons fade in on hover and act on the whole item/group.
-    private var actionColumn: some View {
-        VStack(spacing: 6) {
-            RowActionButton(
-                systemName: item.pinned ? "pin.slash" : "pin",
-                tint: isHighlighted ? .white : .secondary,
-                help: item.pinned ? "Unpin this item" : "Pin this item",
-                action: onTogglePin
-            )
-            if !item.pinned {
-                RowActionButton(
-                    systemName: "xmark",
-                    tint: isHighlighted ? .white : .secondary,
-                    help: "Delete this item from history",
-                    action: onDelete
-                )
-            }
-        }
-        .frame(width: 18)
-        .opacity(isHovered ? 1 : 0)
-        .allowsHitTesting(isHovered)
-    }
 
     /// The ⌘1–9 quick-paste hint on the trailing edge of the first nine rows.
     @ViewBuilder

@@ -159,18 +159,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Keyboard while the panel is open: ⌘1–9 quick-paste, ↑/↓ select, ⏎ paste, Esc close.
+    /// Keyboard while the panel is open: ⌘1–9 quick-paste, ⌘P pin, ⌘⌫ delete, ↑/↓ select, ⏎ paste, Esc close.
     func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.panel.isVisible else { return event }
-            // ⌘1–9 pastes the Nth item in the displayed list. Layout-robust via the
-            // typed character rather than a physical key code.
-            if event.modifierFlags.contains(.command),
-               let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
-               (1...9).contains(digit) {
-                let list = self.clipboardManager.filteredItems
-                if digit <= list.count { self.commit(list[digit - 1]) }
-                return nil   // consume ⌘1–9 either way so it never leaks to the app
+            // ⌘ shortcuts while the panel is open.
+            if event.modifierFlags.contains(.command) {
+                // ⌘1–9 pastes the Nth item (layout-robust via the typed character).
+                if let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }), (1...9).contains(digit) {
+                    let list = self.clipboardManager.filteredItems
+                    if digit <= list.count { self.commit(list[digit - 1]) }
+                    return nil
+                }
+                // ⌘P pin/unpin, ⌘⌫ delete — act on the selected entry only.
+                if let selected = self.clipboardManager.selectedItem {
+                    if event.charactersIgnoringModifiers == "p" {
+                        self.clipboardManager.togglePin(selected)
+                        return nil
+                    }
+                    if event.keyCode == 51 {   // delete / backspace
+                        self.deleteSelected()
+                        return nil
+                    }
+                }
+                return event   // other ⌘ combos pass through (copy, select-all, …)
             }
             switch event.keyCode {
             case 125: // down arrow
@@ -193,6 +205,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             default:
                 return event
             }
+        }
+    }
+
+    /// Delete the selected entry, keeping a neighbour selected for repeat deletes.
+    private func deleteSelected() {
+        guard let item = clipboardManager.selectedItem else { return }
+        let index = clipboardManager.filteredItems.firstIndex { $0.id == item.id }
+        clipboardManager.deleteItem(item)
+        let remaining = clipboardManager.filteredItems
+        if let index, !remaining.isEmpty {
+            clipboardManager.selectedItemID = remaining[min(index, remaining.count - 1)].id
         }
     }
 
