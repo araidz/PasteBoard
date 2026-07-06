@@ -1,25 +1,26 @@
 # PasteBoard
 
-A lightweight clipboard history manager for macOS that lives in your menu bar. Copy anything — text, code, images, files, or folders — and PasteBoard keeps a searchable history you can paste back at any time.
-
-## Screenshots
-
-<p align="center">
-  <img src="docs/screenshot.png" alt="PasteBoard clipboard history in the menu bar" width="360">
-  &nbsp;&nbsp;
-  <img src="docs/screenshot-selection.png" alt="Navigating clipboard history with the arrow keys" width="360">
-</p>
-
-> Sample data shown — your real clipboard never leaves your Mac.
+A lightweight clipboard history manager for macOS that lives in your menu bar. Copy anything — text, code, images, files, or folders — press **⌥⌘V**, and paste it straight back into whatever app you're in.
 
 ## Features
 
-- 📋 **Clipboard history** for text, code, images, and files/folders
+- ⌨️ **⌥⌘V anywhere** — a global hotkey opens your history over any app, search focused
+- ⚡ **Auto-paste** — pick an item and it lands in the app you were typing in (needs Accessibility; falls back to copy-only)
+- 🔢 **⌘1–9 quick paste** — grab the top nine items by number
+- 📋 **History** for text, code, images, and files/folders
 - 🔍 **Instant search** across everything you've copied
-- 📌 **Pin** the items you reuse most so they stay at the top
+- 📌 **Pin** the items you reuse so they stay at the top
 - 🖼️ **Image thumbnails** generated efficiently in the background
 - 🚀 **Launch at login** (optional)
 - 🪶 Native, lightweight menu bar app — no Electron, no clutter
+
+## How it works
+
+1. Copy anything with ⌘C — PasteBoard records it automatically.
+2. Press **⌥⌘V** — your history appears at the pointer, search ready.
+3. Pick with a double-click, **⏎**, or **⌘1–9** — it pastes into the app you were in.
+
+Clicking the menu-bar icon opens a menu of options: launch at login, paste-directly toggle, Accessibility, history limit, and quit.
 
 ## Requirements
 
@@ -27,37 +28,38 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 
 ## Install
 
-1. Go to the [**Releases**](https://github.com/araidz/PasteBoard/releases/latest) page.
-2. Download **`PasteBoard.dmg`**.
-3. Open the `.dmg` and drag **PasteBoard** into your **Applications** folder.
+### Homebrew (recommended)
 
-### First launch
+```bash
+brew install --cask araidz/tap/pasteboard
+```
 
-Because this is a free app that isn't signed with a paid Apple Developer certificate, macOS will block it the first time. This is expected. To open it:
+### Direct download
 
-1. **Right-click** (or Control-click) **PasteBoard** in Applications and choose **Open**.
-2. In the dialog that appears, click **Open** again.
+1. Grab **`PasteBoard.dmg`** from the [Releases](https://github.com/araidz/PasteBoard/releases/latest) page.
+2. Open it and drag **PasteBoard** into **Applications**.
 
-You only need to do this once. After that it opens normally and appears in your menu bar.
+Because this is a free, un-notarized app, macOS blocks it on first launch. Right-click **PasteBoard** → **Open** → **Open**. If you see *"damaged and can't be opened"*:
 
-> If you still see *"PasteBoard is damaged and can't be opened"*, run this in Terminal to remove the quarantine flag:
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/PasteBoard.app
-> ```
+```bash
+xattr -dr com.apple.quarantine /Applications/PasteBoard.app
+```
+
+### Enable auto-paste
+
+To let PasteBoard paste directly into other apps, grant it Accessibility: **System Settings → Privacy & Security → Accessibility**, or use the menu's **Enable Accessibility**. Without it, picking a clip still copies — press ⌘V yourself.
 
 ## Build from source
 
 ```bash
 git clone https://github.com/araidz/PasteBoard.git
 cd PasteBoard
-swift build -c release
+swift build -c release      # or: open Package.swift in Xcode
+swift test                  # run the tests
+./build-release.sh          # package an .app + .dmg into dist/
 ```
 
-Or open the package in Xcode and run it:
-
-```bash
-open Package.swift
-```
+`build-release.sh` ad-hoc signs by default. Run `./make-signing-cert.sh` once to sign with a stable self-signed certificate, so the Accessibility grant persists across updates.
 
 ## License
 

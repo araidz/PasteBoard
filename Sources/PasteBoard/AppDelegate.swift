@@ -106,11 +106,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Dismiss the panel when the user clicks anywhere outside it.
         dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             guard let self = self, self.panel.isVisible else { return }
-            // Ignore clicks on our own status item. This monitor fires on mouse-down,
-            // before the button's action fires on mouse-up; if we hid the panel here,
-            // the action would then see it as hidden and immediately reopen it (the
-            // click would close-then-reopen instead of just closing). Skipping the
-            // status item lets togglePanel be the single source of truth there.
+            // Ignore clicks on our own status item — those open its menu, which
+            // presents itself; hiding the panel here would fight that.
             if let button = self.statusItem.button, let win = button.window {
                 let frameInScreen = win.convertToScreen(button.convert(button.bounds, to: nil))
                 if frameInScreen.contains(NSEvent.mouseLocation) { return }
@@ -162,7 +159,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Arrow keys move the selection; Return pastes the selected item and closes.
+    /// Keyboard while the panel is open: ⌘1–9 quick-paste, ↑/↓ select, ⏎ paste, Esc close.
     func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self = self, self.panel.isVisible else { return event }
