@@ -588,8 +588,10 @@ struct ClipboardItemRow: View, Equatable {
         .background(highlightBackground)
         .contentShape(Rectangle())
         // Double-click pastes; single click selects (highlights) the row.
+        // simultaneousGesture keeps the single tap from waiting on the double-click
+        // timeout, so selection highlights instantly.
         .onTapGesture(count: 2) { onPaste() }
-        .onTapGesture { onSelect() }
+        .simultaneousGesture(TapGesture().onEnded { onSelect() })
     }
 
     // MARK: - Multi-file group
@@ -656,7 +658,7 @@ struct ClipboardItemRow: View, Equatable {
         .contentShape(Rectangle())
         // Double-click pastes the whole group; single click selects it.
         .onTapGesture(count: 2) { onPaste() }
-        .onTapGesture { onSelect() }
+        .simultaneousGesture(TapGesture().onEnded { onSelect() })
     }
 
     // MARK: - Shared pieces

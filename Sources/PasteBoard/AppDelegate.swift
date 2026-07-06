@@ -386,14 +386,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func clipboardDidCapture() {
         guard let button = statusItem.button else { return }
-        let blink = {
-            button.contentTintColor = .controlAccentColor
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                button.contentTintColor = nil
-            }
+        // One slow flash to full white, then back to the normal tint.
+        button.contentTintColor = .white
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            button.contentTintColor = nil
         }
-        blink()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) { blink() }
     }
 }
 
