@@ -386,10 +386,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc func clipboardDidCapture() {
         guard let button = statusItem.button else { return }
-        // One slow flash to full white, then back to the normal tint.
-        button.contentTintColor = .white
+        // Turn the icon solid (full) for a moment on capture, then back to the hollow outline.
+        button.image = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "PasteBoard")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            button.contentTintColor = nil
+            button.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "PasteBoard")
         }
     }
 }
