@@ -49,12 +49,20 @@ enum AutoPaste {
 
     private static func postCommandV() {
         let source = CGEventSource(stateID: .combinedSessionState)
+        let cmd = CGKeyCode(kVK_Command)
         let v = CGKeyCode(kVK_ANSI_V)
-        guard let down = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: false) else { return }
-        down.flags = .maskCommand
-        up.flags = .maskCommand
-        down.post(tap: .cghidEventTap)
-        up.post(tap: .cghidEventTap)
+        // Explicitly press AND release Command around V. Setting only the flag (no
+        // real Command key-up) leaves the modifier dangling in the target's event
+        // stream — its next click inherits it (Terminal then shows a "+" cursor).
+        let cmdDown = CGEvent(keyboardEventSource: source, virtualKey: cmd, keyDown: true)
+        let vDown = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: true)
+        let vUp = CGEvent(keyboardEventSource: source, virtualKey: v, keyDown: false)
+        let cmdUp = CGEvent(keyboardEventSource: source, virtualKey: cmd, keyDown: false)
+        vDown?.flags = .maskCommand
+        vUp?.flags = .maskCommand
+        cmdDown?.post(tap: .cghidEventTap)
+        vDown?.post(tap: .cghidEventTap)
+        vUp?.post(tap: .cghidEventTap)
+        cmdUp?.post(tap: .cghidEventTap)
     }
 }

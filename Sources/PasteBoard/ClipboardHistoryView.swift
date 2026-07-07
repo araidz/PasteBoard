@@ -89,6 +89,14 @@ struct ClipboardHistoryView: View {
     @ObservedObject var manager: ClipboardManager
     var onCommit: (ClipboardItem) -> Void = { _ in }
     var onCommitPath: (String) -> Void = { _ in }
+    // Settings actions, surfaced in the header's gear menu (no more menu-bar menu).
+    var onToggleLaunchAtLogin: () -> Void = {}
+    var isLaunchAtLogin: () -> Bool = { false }
+    var onToggleAutoPaste: () -> Void = {}
+    var isAutoPasteOn: () -> Bool = { true }
+    var onEnableAccessibility: () -> Void = {}
+    var isTrusted: () -> Bool = { false }
+    var onQuit: () -> Void = {}
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -106,6 +114,27 @@ struct ClipboardHistoryView: View {
                     .padding(.horizontal, 7)
                     .padding(.vertical, 2)
                     .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                Menu {
+                    Button((isLaunchAtLogin() ? "✓ " : "") + "Launch at Login", action: onToggleLaunchAtLogin)
+                    Button((isAutoPasteOn() ? "✓ " : "") + "Paste Directly Into App", action: onToggleAutoPaste)
+                    if isTrusted() {
+                        Text("Accessibility Enabled")
+                    } else {
+                        Button("Enable Accessibility…", action: onEnableAccessibility)
+                    }
+                    Menu("History Limit") {
+                        ForEach([50, 100, 200, 500, 1000], id: \.self) { n in
+                            Button((manager.maxItems == n ? "✓ " : "") + "\(n) items") { manager.maxItems = n }
+                        }
+                    }
+                    Divider()
+                    Button("Quit PasteBoard", action: onQuit)
+                } label: {
+                    Image(systemName: "gearshape").foregroundColor(.secondary)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -195,7 +224,7 @@ struct ClipboardHistoryView: View {
             Divider()
             // Footer — keyboard hints + Clear all (the one history action kept here).
             HStack(spacing: 0) {
-                Text("⏎ paste · ⌘P pin · ⌘⌫ delete · esc close")
+                Text("⏎ paste · ⌘P pin · ⌘⌫ delete")
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                 Spacer()
@@ -458,8 +487,32 @@ private struct GroupMemberRow: View {
                 .padding(.horizontal, 6)
         )
         .contentShape(Rectangle())
-        .onTapGesture(count: 2) { onPaste() }
+        .overlay(ClickCatcher { if $0 >= 2 { onPaste() } })
         .onHover { hovered = $0 }
+    }
+}
+
+/// OS-native double-click via AppKit `clickCount` (matches the user's System
+/// Settings), replacing SwiftUI's `.onTapGesture(count: 2)` which caused lag and
+/// flaky double-clicks. count 2 → paste; single click does nothing (highlight is
+/// arrow-only). Deferred one tick so the click's mouseUp completes before the panel
+/// closes (a synchronous close orphaned the mouseUp → "+" drag cursor).
+private struct ClickCatcher: NSViewRepresentable {
+    let onClick: (Int) -> Void
+    func makeNSView(context: Context) -> NSView {
+        let v = ClickView()
+        v.onClick = onClick
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ClickView)?.onClick = onClick
+    }
+    final class ClickView: NSView {
+        var onClick: ((Int) -> Void)?
+        override func mouseDown(with event: NSEvent) {
+            let count = event.clickCount
+            DispatchQueue.main.async { [weak self] in self?.onClick?(count) }
+        }
     }
 }
 
@@ -587,11 +640,8 @@ struct ClipboardItemRow: View, Equatable {
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click pastes; single click selects (highlights) the row.
-        // simultaneousGesture keeps the single tap from waiting on the double-click
-        // timeout, so selection highlights instantly.
-        .onTapGesture(count: 2) { onPaste() }
-        .simultaneousGesture(TapGesture().onEnded { onSelect() })
+        // Double-click pastes; single click does nothing (highlight via arrows only).
+        .overlay(ClickCatcher { if $0 >= 2 { onPaste() } })
     }
 
     // MARK: - Multi-file group
@@ -656,9 +706,8 @@ struct ClipboardItemRow: View, Equatable {
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click pastes the whole group; single click selects it.
-        .onTapGesture(count: 2) { onPaste() }
-        .simultaneousGesture(TapGesture().onEnded { onSelect() })
+        // Double-click pastes the whole group; single click does nothing.
+        .overlay(ClickCatcher { if $0 >= 2 { onPaste() } })
     }
 
     // MARK: - Shared pieces
