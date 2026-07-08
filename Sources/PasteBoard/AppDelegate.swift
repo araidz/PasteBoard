@@ -63,6 +63,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.lastOpenFromIcon = false
             self?.toggleWindow()
         }
+        // After an update macOS can drop the Accessibility grant (self-signed apps
+        // re-verify on each new binary). If auto-paste is on but we're no longer trusted,
+        // nudge to re-enable — deferred so the menu-bar item is up first. Silent when trusted.
+        if autoPasteEnabled && !AutoPaste.isTrusted {
+            DispatchQueue.main.async { AutoPaste.requestPermission() }
+        }
     }
 
     // MARK: - Clipboard capture
