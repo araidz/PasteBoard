@@ -25,8 +25,10 @@ struct HistoryView: View {
             searchField
             Divider()
             list
+            Divider()
+            footer
         }
-        .frame(width: 320, height: 460)
+        .frame(width: 290, height: 520)
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = true
         }
@@ -161,5 +163,34 @@ struct HistoryView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 2)
+    }
+
+    // Keyboard-shortcut legend on the left, Clear-all on the right — matches the OG bar.
+    private var footer: some View {
+        HStack(spacing: 9) {
+            footerHint(symbol: "return", "paste")
+            footerHint(keys: "⌘P", "pin")
+            footerHint(keys: "⌘⌫", "delete")
+            Spacer()
+            Button {
+                manager.clearAll()
+            } label: {
+                Label("clear all", systemImage: "trash")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Clear unpinned history")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func footerHint(symbol: String? = nil, keys: String? = nil, _ label: String) -> some View {
+        HStack(spacing: 3) {
+            if let symbol { Image(systemName: symbol).font(.system(size: 10)) }
+            if let keys { Text(keys).font(.system(size: 11, weight: .medium)) }
+            Text(label).font(.system(size: 11)).foregroundColor(.secondary)
+        }
     }
 }

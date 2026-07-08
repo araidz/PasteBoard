@@ -3,8 +3,7 @@
 
 # Swift Package Manager / Xcode build artifacts
 .build/
-.swiftpm/xcode/package.xcworkspace/xcuserdata/
-.swiftpm/xcode/xcuserdata/
+.swiftpm/
 *.xcuserstate
 
 # Build output (the .app and .dmg are distributed via GitHub Releases, not committed)

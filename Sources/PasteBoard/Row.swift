@@ -104,67 +104,87 @@ func fileIconName(forPath path: String?) -> String {
 private func resolveFileIconName(forExtension ext: String) -> String {
     switch ext {
     // Archives / packages
-    case "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "pkg", "xip", "deb":
-        return "doc.zipper"
-    // Disk images
-    case "dmg", "iso", "img", "sparseimage", "sparsebundle":
+    case "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "pkg", "xip", "deb", "rpm", "cab", "lz", "zst":
+        return "archivebox"
+    // Disk images / volumes
+    case "dmg", "iso", "img", "sparseimage", "sparsebundle", "vmdk", "vdi", "toast":
         return "opticaldiscdrive"
-    // Images
-    case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp", "svg", "ico":
+    // Raster images / camera raw
+    case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp", "ico",
+         "raw", "cr2", "cr3", "nef", "dng", "arw", "orf", "rw2":
         return "photo"
+    // Vector / design source
+    case "svg", "psd", "ai", "sketch", "fig", "xcf", "afdesign", "afphoto", "indd", "eps", "cdr":
+        return "paintpalette"
     // PDF
     case "pdf":
         return "doc.richtext"
     // Word-processing / rich documents
-    case "doc", "docx", "pages", "rtf", "rtfd", "odt":
+    case "doc", "docx", "pages", "rtf", "rtfd", "odt", "wpd":
         return "doc.text"
-    // Plain text / notes / markdown
-    case "txt", "text", "md", "markdown", "log", "rst":
+    // Plain text / markdown / notes
+    case "txt", "text", "md", "markdown", "rst", "adoc", "org", "tex":
         return "doc.plaintext"
+    // Logs
+    case "log":
+        return "list.bullet.rectangle"
     // Spreadsheets
     case "xls", "xlsx", "numbers", "csv", "tsv", "ods":
         return "tablecells"
     // Presentations
     case "ppt", "pptx", "key", "odp":
-        return "rectangle.on.rectangle"
+        return "rectangle.on.rectangle.angled"
     // Audio
-    case "mp3", "wav", "aac", "flac", "m4a", "aiff", "aif", "ogg", "opus", "wma", "mid", "midi":
+    case "mp3", "wav", "aac", "flac", "m4a", "aiff", "aif", "ogg", "opus", "wma", "mid", "midi", "alac":
         return "music.note"
     // Video
-    case "mp4", "mov", "avi", "mkv", "m4v", "webm", "wmv", "flv", "mpg", "mpeg", "3gp":
+    case "mp4", "mov", "avi", "mkv", "m4v", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "vob":
         return "film"
+    // Shell scripts / terminal
+    case "sh", "bash", "zsh", "fish", "command", "ps1", "bat", "cmd", "zshrc", "bashrc":
+        return "terminal"
     // Source code
     case "swift", "c", "cpp", "cc", "cxx", "h", "hpp", "m", "mm", "java", "kt", "kts",
          "js", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "php", "cs",
-         "html", "htm", "css", "scss", "sass", "sh", "bash", "zsh", "fish",
-         "pl", "lua", "sql", "r", "dart", "scala", "vue", "svelte", "ex", "exs":
+         "html", "htm", "css", "scss", "sass", "less",
+         "pl", "lua", "sql", "r", "dart", "scala", "vue", "svelte", "ex", "exs",
+         "clj", "hs", "erl", "groovy", "gradle", "ipynb":
         return "chevron.left.forwardslash.chevron.right"
     // Structured data / config
-    case "json", "xml", "yaml", "yml", "toml", "plist", "ini", "conf", "cfg", "env":
+    case "json", "xml", "yaml", "yml", "toml", "plist", "ini", "conf", "cfg", "env", "properties":
         return "curlybraces"
+    // Databases
+    case "db", "sqlite", "sqlite3", "sql3", "mdb", "accdb", "realm":
+        return "cylinder"
     // Fonts
     case "ttf", "otf", "woff", "woff2", "ttc", "eot":
         return "textformat"
-    // Ebooks
-    case "epub", "mobi", "azw", "azw3":
+    // Ebooks / comics
+    case "epub", "mobi", "azw", "azw3", "fb2", "cbz", "cbr":
         return "book"
-    // Design / graphics source
-    case "psd", "ai", "sketch", "fig", "xcf", "afdesign", "afphoto", "indd":
-        return "paintpalette"
-    // Apps / executables
-    case "app", "exe", "appimage", "msi":
+    // 3D models / CAD
+    case "obj", "stl", "fbx", "gltf", "glb", "usdz", "usd", "blend", "dae", "3ds", "step", "stp":
+        return "cube"
+    // Certificates / keys
+    case "pem", "crt", "cer", "der", "key", "p12", "pfx", "pub", "gpg", "asc":
+        return "key"
+    // Apps / executables / installers
+    case "app", "exe", "appimage", "msi", "apk", "jar", "bin", "run":
         return "app"
-    // Calendar / contacts
+    // Calendar
     case "ics", "ical":
         return "calendar"
+    // Contacts
     case "vcf", "vcard":
         return "person.crop.square"
+    // Torrents
+    case "torrent":
+        return "arrow.down.circle"
     default:
         break
     }
-    // Anything not in the curated list above: resolve via the system's Uniform
-    // Type hierarchy so even uncommon/unknown extensions map to a sensible
-    // category icon instead of a generic document.
+    // Anything not curated above: resolve via the system's Uniform Type hierarchy so
+    // even uncommon extensions map to a sensible category icon, not a generic document.
     return systemTypeIconName(forExtension: ext)
 }
 
@@ -173,21 +193,20 @@ private func resolveFileIconName(forExtension ext: String) -> String {
 /// document glyph only when the type is truly unknown.
 private func systemTypeIconName(forExtension ext: String) -> String {
     guard !ext.isEmpty, let type = UTType(filenameExtension: ext) else { return "doc" }
-    // Most specific first — many types conform to broader ones (e.g. source
-    // code and JSON both conform to plain text).
-    if type.conforms(to: .sourceCode) || type.conforms(to: .script) || type.conforms(to: .shellScript) {
-        return "chevron.left.forwardslash.chevron.right"
-    }
+    // Most specific first — many types conform to broader ones (e.g. source code
+    // and JSON both conform to plain text).
+    if type.conforms(to: .shellScript) || type.conforms(to: .script) { return "terminal" }
+    if type.conforms(to: .sourceCode) { return "chevron.left.forwardslash.chevron.right" }
     if type.conforms(to: .json) || type.conforms(to: .xml) || type.conforms(to: .propertyList) {
         return "curlybraces"
     }
     if type.conforms(to: .pdf) { return "doc.richtext" }
+    if type.conforms(to: .threeDContent) { return "cube" }
     if type.conforms(to: .image) { return "photo" }
-    if type.conforms(to: .movie) { return "film" }
+    if type.conforms(to: .movie) || type.conforms(to: .audiovisualContent) { return "film" }
     if type.conforms(to: .audio) { return "music.note" }
-    if type.conforms(to: .audiovisualContent) { return "film" }
     if type.conforms(to: .diskImage) { return "opticaldiscdrive" }
-    if type.conforms(to: .archive) { return "doc.zipper" }
+    if type.conforms(to: .archive) { return "archivebox" }
     if type.conforms(to: .font) { return "textformat" }
     if type.conforms(to: .application) || type.conforms(to: .executable) || type.conforms(to: .unixExecutable) {
         return "app"
@@ -196,7 +215,7 @@ private func systemTypeIconName(forExtension ext: String) -> String {
     if type.conforms(to: .calendarEvent) { return "calendar" }
     if type.conforms(to: .rtf) || type.conforms(to: .rtfd) { return "doc.text" }
     if type.conforms(to: .spreadsheet) { return "tablecells" }
-    if type.conforms(to: .presentation) { return "rectangle.on.rectangle" }
+    if type.conforms(to: .presentation) { return "rectangle.on.rectangle.angled" }
     if type.conforms(to: .plainText) { return "doc.plaintext" }
     if type.conforms(to: .text) { return "doc.text" }
     return "doc"

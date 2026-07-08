@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // from the app you'll paste back into; content is wrapped in Liquid Glass on
         // macOS 26+.
         let w = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 460),
+            contentRect: NSRect(x: 0, y: 0, width: 290, height: 520),
             styleMask: [.borderless, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -140,6 +140,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.isReleasedWhenClosed = false
         w.isOpaque = false
         w.backgroundColor = .clear
+        // Lock the panel to a fixed size so it always opens at 290×520, whether the
+        // history list is empty or full.
+        w.contentMinSize = NSSize(width: 290, height: 520)
+        w.contentMaxSize = NSSize(width: 290, height: 520)
 
         let hosting = NSHostingView(
             rootView: HistoryView(
@@ -161,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             w.hasShadow = false
         } else {
             // Pre-macOS-26: a menu-material blurred surface as the Liquid Glass fallback.
-            let effect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 320, height: 460))
+            let effect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 290, height: 520))
             effect.material = .menu
             effect.blendingMode = .behindWindow
             effect.state = .active
