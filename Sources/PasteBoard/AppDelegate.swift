@@ -1,357 +1,305 @@
 import Cocoa
-import QuartzCore
 import SwiftUI
-import ServiceManagement
 import Carbon.HIToolbox
+import ServiceManagement
 
-/// Wraps the macOS 13+ login-item API so the app can launch itself at startup.
-enum LoginItem {
-    static var isEnabled: Bool {
-        SMAppService.mainApp.status == .enabled
+// The app delegate: menu-bar item, global ⌥⌘V hotkey, the clipboard-capture timer,
+// the floating history panel, keyboard navigation, and commit → auto-paste.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem!
+    private var window: NSWindow?
+    private var keyMonitor: Any?
+    private var capturedApp: NSRunningApplication?   // where auto-paste sends the item
+    private var hotKey: HotKey?
+    private var pollTimer: Timer?
+    private var dismissMonitor: Any?
+    private var lastCloseTime = Date.distantPast   // guards the toggle against reopen-on-close
+    private var lastOpenFromIcon = false            // icon click → center under icon; hotkey → at cursor
+
+    private let clipboardManager = ClipboardManager()
+
+    // Auto-paste preference (gear menu: "Paste Directly Into App"); default on.
+    private var autoPasteEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: "autoPasteEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "autoPasteEnabled") }
     }
 
-    static func setEnabled(_ enabled: Bool) {
+    // Launch at login via SMAppService (only effective for the packaged .app; the dev
+    // binary isn't a registered bundle, so register() throws — logged, harmless).
+    private var isLaunchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
+    private func toggleLaunchAtLogin() {
         do {
-            if enabled {
-                if SMAppService.mainApp.status != .enabled {
-                    try SMAppService.mainApp.register()
-                }
-            } else if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            }
-        } catch {
-            NSLog("PasteBoard: failed to update login item — \(error.localizedDescription)")
-        }
+            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
+            else { try SMAppService.mainApp.register() }
+        } catch { NSLog("launch-at-login toggle failed: \(error)") }
     }
-}
-
-/// A borderless panel that can still become key/main so the search field and
-/// keyboard navigation work without a title bar.
-final class FloatingPanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
-}
-
-class AppDelegate: NSObject, NSApplicationDelegate {
-    var statusItem: NSStatusItem!
-    var panel: NSPanel!
-    var clipboardManager = ClipboardManager()
-    var timer: Timer?
-    var keyMonitor: Any?
-    var dismissMonitor: Any?
-    var hotKey: HotKey?
-    // The app that was frontmost when the panel opened — where auto-paste sends the item.
-    var capturedApp: NSRunningApplication?
-
-    // How often the pasteboard is polled for new content (no system notification exists).
-    private static let pollInterval: TimeInterval = 0.5
-
-    // Corner radius of the panel's glass surface, tuned to match macOS 26 menus.
-    private static let panelCornerRadius: CGFloat = 13
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.image = NSImage(
+            systemSymbolName: "clipboard.fill",
+            accessibilityDescription: "PasteBoard"
+        )
 
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "PasteBoard")
-            // Click the icon to toggle the history window (open below the icon /
-            // dismiss). No menu — all options live in the window's gear button.
-            button.action = #selector(statusItemClicked)
-            button.target = self
+        // Clicking the menu-bar icon toggles the panel; all settings live in the
+        // in-panel gear menu.
+        statusItem.button?.action = #selector(iconClicked)
+        statusItem.button?.target = self
+
+        installKeyMonitor()
+        startMonitoring()
+        // Flash the menu-bar icon when something is captured.
+        NotificationCenter.default.addObserver(self, selector: #selector(flashIcon), name: .clipboardDidCapture, object: nil)
+        // Dismiss when the user clicks outside our window (global monitor only sees
+        // clicks destined for OTHER apps, so clicks inside our window won't fire it).
+        dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            guard let self, self.window?.isVisible == true else { return }
+            self.closeWindow()
         }
+        // ⌥⌘V from any app opens/closes the window (captures the target at press time).
+        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
+            self?.lastOpenFromIcon = false
+            self?.toggleWindow()
+        }
+    }
 
-        // Borderless, floating, user-resizable panel — no title bar at all.
-        panel = FloatingPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 280, height: 540),
+    // MARK: - Clipboard capture
+
+    private func startMonitoring() {
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.clipboardManager.checkForChanges()
+        }
+    }
+
+    // Briefly flash the icon to the outline clipboard as a capture confirmation, then back to full.
+    @objc private func flashIcon() {
+        statusItem.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Captured")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            self?.statusItem.button?.image = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "PasteBoard")
+        }
+    }
+
+    // Place the panel just below the mouse cursor, clamped to the active screen.
+    private func positionNearCursor(_ w: NSWindow) {
+        let mouse = NSEvent.mouseLocation
+        guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
+        let vf = screen.visibleFrame
+        let size = w.frame.size
+        var origin = NSPoint(x: mouse.x, y: mouse.y - size.height)
+        origin.x = min(max(vf.minX, origin.x), vf.maxX - size.width)
+        origin.y = min(max(vf.minY, origin.y), vf.maxY - size.height)
+        w.setFrameOrigin(origin)
+    }
+
+    // Menu-bar icon click: remember the anchor so the panel centers under the icon.
+    @objc private func iconClicked() {
+        lastOpenFromIcon = true
+        toggleWindow()
+    }
+
+    // Center the panel horizontally under the menu-bar icon, top just below the menu bar.
+    private func positionUnderIcon(_ w: NSWindow) {
+        guard let iconWindow = statusItem.button?.window else { positionNearCursor(w); return }
+        let iconFrame = iconWindow.frame
+        let vf = (iconWindow.screen ?? NSScreen.main)?.visibleFrame ?? iconFrame
+        let size = w.frame.size
+        var origin = NSPoint(x: iconFrame.midX - size.width / 2, y: iconFrame.minY - size.height)
+        origin.x = min(max(vf.minX, origin.x), vf.maxX - size.width)
+        origin.y = min(max(vf.minY, origin.y), vf.maxY - size.height)
+        w.setFrameOrigin(origin)
+    }
+
+    @objc private func toggleWindow() {
+        if let w = window, w.isVisible {
+            closeWindow()
+        } else {
+            // The outside-click monitor also fires on this status-item click and may have
+            // just closed the panel — don't immediately reopen it.
+            if Date().timeIntervalSince(lastCloseTime) < 0.2 { return }
+            openWindow()
+        }
+    }
+
+    // MARK: - Window
+
+    private func makeWindow() -> NSWindow {
+        // Borderless, non-activating floating panel so opening it never steals focus
+        // from the app you'll paste back into; content is wrapped in Liquid Glass on
+        // macOS 26+.
+        let w = FloatingPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 460),
             styleMask: [.borderless, .resizable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.hidesOnDeactivate = false          // we dismiss manually (see dismissMonitor)
-        panel.isReleasedWhenClosed = false
-        panel.isMovableByWindowBackground = true
-        panel.contentMinSize = NSSize(width: 260, height: 420)
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.hasShadow = true
-        panel.setFrameAutosaveName("PasteBoardPanel")
+        w.isFloatingPanel = true
+        w.level = .floating
+        w.hidesOnDeactivate = false
+        w.isReleasedWhenClosed = false
+        w.isOpaque = false
+        w.backgroundColor = .clear
 
-        let hostingView = NSHostingView(
-            rootView: ClipboardHistoryView(
+        let hosting = NSHostingView(
+            rootView: HistoryView(
                 manager: clipboardManager,
-                onCommit: { [weak self] in self?.commit($0) },
-                onCommitPath: { [weak self] in self?.commitPath($0) },
-                onToggleLaunchAtLogin: { LoginItem.setEnabled(!LoginItem.isEnabled) },
-                isLaunchAtLogin: { LoginItem.isEnabled },
-                onToggleAutoPaste: { [weak self] in self?.autoPasteEnabled.toggle() },
-                isAutoPasteOn: { [weak self] in self?.autoPasteEnabled ?? true },
+                onCommit: { [weak self] item in self?.commit(item) },
+                onCommitPath: { [weak self] path in self?.commitPath(path) },
+                onToggleLaunchAtLogin: { [weak self] in self?.toggleLaunchAtLogin() },
+                isLaunchAtLogin: { [weak self] in self?.isLaunchAtLogin ?? false },
                 onEnableAccessibility: { AutoPaste.requestPermission() },
                 isTrusted: { AutoPaste.isTrusted },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
         if #available(macOS 26.0, *) {
-            // Embed the SwiftUI content in the system's Liquid Glass surface. This
-            // is the exact view menus use, so the material, the rounded corners, and
-            // the drop shadow all match a real menu as a single unit — which also
-            // avoids the corner artifacts you get from hand-clipping a glass view.
             let glass = NSGlassEffectView()
-            glass.cornerRadius = Self.panelCornerRadius
-            glass.contentView = hostingView
-            panel.contentView = glass
-            // The glass surface casts its own correctly-rounded shadow. The window's
-            // automatic shadow is derived from the square content silhouette, so
-            // leaving it on traces a dark, slightly-square fringe around the rounded
-            // corners (it doesn't follow the radius). Turn it off so only the glass's
-            // own shadow remains — exactly like a real menu.
-            panel.hasShadow = false
+            glass.cornerRadius = 13
+            glass.contentView = hosting
+            w.contentView = glass
+            w.hasShadow = false
         } else {
-            hostingView.autoresizingMask = [.width, .height]
-            panel.contentView = hostingView
+            // Pre-macOS-26: a menu-material blurred surface as the Liquid Glass fallback.
+            let effect = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 320, height: 460))
+            effect.material = .menu
+            effect.blendingMode = .behindWindow
+            effect.state = .active
+            effect.wantsLayer = true
+            effect.layer?.cornerRadius = 13
+            effect.layer?.masksToBounds = true
+            hosting.frame = effect.bounds
+            hosting.autoresizingMask = [.width, .height]
+            effect.addSubview(hosting)
+            w.contentView = effect
         }
-
-        // Dismiss the panel when the user clicks anywhere outside it.
-        dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            guard let self = self, self.panel.isVisible else { return }
-            // Ignore clicks on our own status item — those open its menu, which
-            // presents itself; hiding the panel here would fight that.
-            if let button = self.statusItem.button, let win = button.window {
-                let frameInScreen = win.convertToScreen(button.convert(button.bounds, to: nil))
-                if frameInScreen.contains(NSEvent.mouseLocation) { return }
-            }
-            self.hidePanel()
-        }
-
-        // Listen for clipboard captures to blink the menu bar icon
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(clipboardDidCapture),
-            name: .clipboardDidCapture,
-            object: nil
-        )
-
-        startMonitoring()
-        installKeyMonitor()
-
-        // ⌥⌘V opens the history over whatever app you're in (needs no permission).
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
-            self?.toggle(nearCursor: true)
-        }
-
-        // Hide dock icon — menu bar only
-        NSApp.setActivationPolicy(.accessory)
-
-        // Launch at login is on by default on first run; the user can toggle it
-        // off in the panel (or System Settings) and we respect that afterward.
-        let defaults = UserDefaults.standard
-        if !defaults.bool(forKey: "didInitializeLoginItem") {
-            LoginItem.setEnabled(true)
-            defaults.set(true, forKey: "didInitializeLoginItem")
-        }
-
-        // A pure menu-bar app shouldn't show any window at launch. SwiftUI's
-        // Settings scene (or window-state restoration) can present an empty
-        // "PasteBoard Settings" window. Close only *titled* windows — our panel
-        // and the status-bar item's window are borderless, so they're untouched.
-        DispatchQueue.main.async {
-            for window in NSApp.windows where window.styleMask.contains(.titled) {
-                window.close()
-            }
-        }
+        return w
     }
 
-    func startMonitoring() {
-        timer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
-            self?.clipboardManager.checkForChanges()
+    @objc private func openWindow() {
+        let w = window ?? makeWindow()
+        window = w
+        // Capture the app to paste back into — never ourselves (compare by pid so
+        // it's robust whether or not this build has a bundle id).
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.processIdentifier != NSRunningApplication.current.processIdentifier {
+            capturedApp = front
         }
+        clipboardManager.selectedItemID = nil
+        clipboardManager.searchText = ""       // fresh, unfiltered list on each open
+        if lastOpenFromIcon { positionUnderIcon(w) } else { positionNearCursor(w) }
+        w.makeKeyAndOrderFront(nil)
+        // Focus the search field once the panel is key (next runloop).
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .panelDidShow, object: nil) }
     }
 
-    /// Keyboard while the panel is open: ⌘1–9 quick-paste, ⌘P pin, ⌘⌫ delete, ↑/↓ select, ⏎ paste, Esc close.
-    func installKeyMonitor() {
+    private func closeWindow() {
+        window?.orderOut(nil)
+        lastCloseTime = Date()
+    }
+
+    // MARK: - Keyboard
+
+    private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self, self.panel.isVisible else { return event }
-            // ⌘ shortcuts while the panel is open.
+            guard let self, let window = self.window, window.isVisible else { return event }
+            let list = self.clipboardManager.filteredItems
+
+            // ⌘-shortcuts: ⌘1–9 quick-paste the Nth visible row, ⌘P pin/unpin, ⌘⌫ delete.
             if event.modifierFlags.contains(.command) {
-                // ⌘1–9 pastes the Nth item (layout-robust via the typed character).
-                if let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }), (1...9).contains(digit) {
-                    let list = self.clipboardManager.filteredItems
-                    if digit <= list.count { self.commit(list[digit - 1]) }
+                if let chars = event.charactersIgnoringModifiers, let n = Int(chars), (1...9).contains(n) {
+                    if list.indices.contains(n - 1) { self.commit(list[n - 1]) }
                     return nil
                 }
-                // ⌘P pin/unpin, ⌘⌫ delete — act on the selected entry only.
-                if let selected = self.clipboardManager.selectedItem {
-                    if event.charactersIgnoringModifiers == "p" {
-                        self.clipboardManager.togglePin(selected)
-                        return nil
-                    }
-                    if event.keyCode == 51 {   // delete / backspace
-                        self.deleteSelected()
-                        return nil
-                    }
+                switch event.keyCode {
+                case 35:  // P — pin/unpin the highlighted row
+                    if let item = self.clipboardManager.selectedItem { self.clipboardManager.togglePin(item) }
+                    return nil
+                case 51:  // ⌫ — delete the highlighted row (pinned rows are protected)
+                    if let item = self.clipboardManager.selectedItem { self.clipboardManager.deleteItem(item) }
+                    return nil
+                default:
+                    return event
                 }
-                return event   // other ⌘ combos pass through (copy, select-all, …)
             }
+
             switch event.keyCode {
-            case 125: // down arrow
-                self.clipboardManager.moveSelection(by: 1)
-                return nil
-            case 126: // up arrow
-                self.clipboardManager.moveSelection(by: -1)
-                return nil
-            case 36, 76: // return / keypad enter
-                // Use the highlighted row, or fall back to the top item so Return
-                // pastes the most recent entry even when nothing is selected yet.
-                if let item = self.clipboardManager.selectedItem ?? self.clipboardManager.filteredItems.first {
-                    self.commit(item)
-                    return nil
+            case 125: self.clipboardManager.moveSelection(by: 1); return nil   // down
+            case 126: self.clipboardManager.moveSelection(by: -1); return nil  // up
+            case 36, 76:                                                       // return / keypad enter
+                if let item = self.clipboardManager.selectedItem ?? list.first {
+                    self.commit(item); return nil
                 }
                 return event
-            case 53: // esc
-                self.hidePanel()
-                return nil
-            default:
-                return event
+            case 53: self.closeWindow(); return nil            // esc
+            default: return event
             }
         }
     }
 
-    /// Delete the selected entry, keeping a neighbour selected for repeat deletes.
-    private func deleteSelected() {
-        guard let item = clipboardManager.selectedItem else { return }
-        let index = clipboardManager.filteredItems.firstIndex { $0.id == item.id }
-        clipboardManager.deleteItem(item)
-        let remaining = clipboardManager.filteredItems
-        if let index, !remaining.isEmpty {
-            clipboardManager.selectedItemID = remaining[min(index, remaining.count - 1)].id
-        }
-    }
+    // MARK: - Commit + auto-paste
 
-    /// Menu-bar icon click toggles the history window below the icon.
-    @objc private func statusItemClicked() { toggle(nearCursor: false) }
-
-    /// Show or hide the history. `nearCursor` positions it at the pointer (hotkey)
-    /// instead of under the menu-bar icon (click).
-    func toggle(nearCursor: Bool) {
-        if panel.isVisible {
-            hidePanel()
-        } else {
-            // Capture the frontmost app before we activate ourselves — that's the
-            // app auto-paste will send the picked item back into.
-            if let front = NSWorkspace.shared.frontmostApplication,
-               front.processIdentifier != NSRunningApplication.current.processIdentifier {
-                capturedApp = front
+    private func commit(_ item: ClipboardItem) {
+        // Terminals can't accept a file-url or image via synthetic ⌘V (it beeps). For
+        // files/folders, paste the shell-escaped path(s) as text — same result as
+        // dragging the file in. Image data has no text form → copy-only (no ⌘V).
+        if capturedIsTerminal {
+            switch item.type {
+            case .file, .folder:
+                clipboardManager.pasteText((item.filePaths ?? []).map(Self.shellEscape).joined(separator: " "))
+                finishPaste()
+                return
+            case .image:
+                clipboardManager.pasteItem(item)
+                closeWindow()
+                return
+            case .text, .code:
+                break
             }
-            showPanel(nearCursor: nearCursor)
         }
+        clipboardManager.pasteItem(item)   // writes the right type back + guards re-capture
+        finishPaste()
     }
 
-    // MARK: - Commit (paste)
-
-    /// Whether to auto-paste into the previous app (default on). Persisted.
-    var autoPasteEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "autoPasteEnabled") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "autoPasteEnabled") }
-    }
-
-    /// Put an item on the clipboard, close the panel, and (if permitted) paste it
-    /// straight back into the app you came from.
-    func commit(_ item: ClipboardItem) {
-        clipboardManager.pasteItem(item)
-        finishCommit()
-    }
-
-    /// Commit a single member of a multi-file group.
-    func commitPath(_ path: String) {
+    /// Paste a single member of an expanded multi-file group.
+    private func commitPath(_ path: String) {
         clipboardManager.pasteSubPath(path)
-        finishCommit()
+        finishPaste()
     }
 
-    private func finishCommit() {
+    /// Close the panel, then auto-paste the clipboard into the app we captured.
+    private func finishPaste() {
+        closeWindow()
         let target = capturedApp
-        hidePanel()
-        let targetIsSelf = target == nil || target?.processIdentifier == NSRunningApplication.current.processIdentifier
-        let action = AutoPaste.action(autoPasteEnabled: autoPasteEnabled,
-                                      trusted: AutoPaste.isTrusted,
-                                      targetIsSelf: targetIsSelf)
-        if action == .autoPaste {
+        let isSelf = target?.processIdentifier == NSRunningApplication.current.processIdentifier
+        if autoPasteEnabled, AutoPaste.isTrusted, let target, !isSelf {
             AutoPaste.paste(into: target)
         }
     }
 
-    /// Open the panel — under the menu-bar icon, or at the pointer for the hotkey.
-    private func showPanel(nearCursor: Bool) {
-        // Don't pre-select a row — hover or the first arrow key establishes it.
-        clipboardManager.selectedItemID = nil
-        if nearCursor {
-            positionPanelAtCursor()
-        } else if let button = statusItem.button {
-            positionPanel(below: button)
-        }
-        panel.makeKeyAndOrderFront(nil)
-        panel.orderFrontRegardless()
-        // Open fresh: clear any prior query and focus the search field.
-        DispatchQueue.main.async {
-            self.clipboardManager.searchText = ""
-            NotificationCenter.default.post(name: .panelDidShow, object: nil)
-        }
+    /// Whether the app we'll paste into is a terminal emulator.
+    private var capturedIsTerminal: Bool {
+        guard let name = capturedApp?.localizedName else { return false }
+        return ClipboardItemRow.isTerminalApp(name)
     }
 
-    /// Place the panel near the mouse pointer, clamped on screen.
-    private func positionPanelAtCursor() {
-        let mouse = NSEvent.mouseLocation
-        var origin = NSPoint(x: mouse.x - 8, y: mouse.y - panel.frame.height + 8)
-        let screen = NSScreen.screens.first { $0.frame.contains(mouse) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - panel.frame.width - 8)
-            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - panel.frame.height - 8)
+    /// Escape a path for a shell prompt the way dragging a file into Terminal does:
+    /// leave normal path characters bare and backslash-escape only what the shell
+    /// treats specially (spaces, quotes, globs, …). No wrapping quotes.
+    private static func shellEscape(_ path: String) -> String {
+        let safe = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-+,@%=:")
+        var out = ""
+        for ch in path {
+            if !safe.contains(ch) { out.append("\\") }
+            out.append(ch)
         }
-        panel.setFrameOrigin(origin)
-    }
-
-    /// Close the panel. All dismissal paths (toggle, click-outside, paste) funnel
-    /// through here.
-    private func hidePanel() {
-        panel.orderOut(nil)
-    }
-
-    /// Place the panel just beneath the menu bar icon, kept on screen.
-    private func positionPanel(below button: NSStatusBarButton) {
-        guard let buttonWindow = button.window else {
-            panel.center()
-            return
-        }
-        let buttonRectInScreen = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
-        var origin = NSPoint(
-            x: buttonRectInScreen.midX - panel.frame.width / 2,
-            y: buttonRectInScreen.minY - panel.frame.height - 4
-        )
-        if let screen = buttonWindow.screen ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - panel.frame.width - 8)
-            origin.y = max(origin.y, visible.minY + 8)
-        }
-        panel.setFrameOrigin(origin)
-    }
-
-    @objc func clipboardDidCapture() {
-        guard let button = statusItem.button else { return }
-        button.wantsLayer = true
-        button.layer?.cornerRadius = 4
-        // Smooth capture pulse: a brief accent highlight behind the icon that eases
-        // out, so a copy visibly flashes the menu-bar icon (no jarring blink).
-        let flash = CABasicAnimation(keyPath: "backgroundColor")
-        flash.fromValue = NSColor.controlAccentColor.cgColor
-        flash.toValue = NSColor.clear.cgColor
-        flash.duration = 0.5
-        flash.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        button.layer?.add(flash, forKey: "captureFlash")
+        return out
     }
 }
 
-// NOTE: reconstructed — notification name used to signal a capture.
-extension Notification.Name {
-    static let clipboardDidCapture = Notification.Name("clipboardDidCapture")
-    static let panelDidShow = Notification.Name("panelDidShow")
+/// Borderless panels can't become key by default — override so keyboard input
+/// (arrows / Enter via the local monitor) works without a title bar.
+final class FloatingPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
 }

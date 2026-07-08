@@ -20,11 +20,11 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 2. Press **⌥⌘V** — your history appears at the pointer, search ready.
 3. Pick with a double-click, **⏎**, or **⌘1–9** — it pastes into the app you were in.
 
-Clicking the menu-bar icon opens a menu of options: launch at login, paste-directly toggle, Accessibility, history limit, and quit.
+Clicking the menu-bar icon opens the same panel, centered beneath it. Its **gear menu** holds the options: launch at login, paste-directly toggle, Accessibility, history limit, and quit.
 
 ## Requirements
 
-- macOS 13 (Ventura) or later
+- macOS 14 (Sonoma) or later
 
 ## Install
 

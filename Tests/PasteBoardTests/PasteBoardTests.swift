@@ -3,139 +3,170 @@ import XCTest
 
 final class PasteBoardTests: XCTestCase {
 
-    // A ClipboardManager backed by a throwaway temp directory so tests never
-    // touch real Application Support data.
+    // Fresh, isolated storage per manager so nothing touches real history.
     private func makeManager() -> ClipboardManager {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pb-test-\(UUID().uuidString)", isDirectory: true)
-        return ClipboardManager(baseDirectory: dir)
+        ClipboardManager(baseDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString))
     }
 
+    // Distinct ids (selection/dedup) and monotonic timestamps per built item.
+    private var tick: TimeInterval = 0
     private func textItem(_ text: String, pinned: Bool = false) -> ClipboardItem {
-        ClipboardItem(id: UUID(), type: ClipboardManager.classifyText(text),
-                      textContent: text, imagePath: nil, filePaths: nil,
-                      timestamp: Date(), sourceApp: nil, pinned: pinned)
+        tick += 1
+        return ClipboardItem(
+            id: UUID(), type: .text, textContent: text,
+            imagePath: nil, filePaths: nil,
+            timestamp: Date(timeIntervalSince1970: tick),
+            sourceApp: nil, pinned: pinned)
     }
 
-    // MARK: - Text classification
-
-    func testClassifyCodeVsProse() {
-        XCTAssertEqual(ClipboardManager.classifyText("func greet() {\n    return 1\n}"), .code)
-        XCTAssertEqual(ClipboardManager.classifyText("Let me know what you think about this."), .text)
-        // Too short to judge — defaults to plain text.
-        XCTAssertEqual(ClipboardManager.classifyText("let x = 1"), .text)
-    }
-
-    // MARK: - File vs folder classification
-
-    func testFileTypeDistinguishesFolders() throws {
-        let base = FileManager.default.temporaryDirectory
-            .appendingPathComponent("pb-ft-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        let folder = base.appendingPathComponent("subdir", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = base.appendingPathComponent("note.txt")
-        try "hi".write(to: file, atomically: true, encoding: .utf8)
-
-        XCTAssertEqual(ClipboardManager.fileType(forPaths: [folder.path]), .folder)
-        XCTAssertEqual(ClipboardManager.fileType(forPaths: [file.path]), .file)
-        // A mix of file + folder is not "all directories" → treated as files.
-        XCTAssertEqual(ClipboardManager.fileType(forPaths: [folder.path, file.path]), .file)
-    }
-
-    // MARK: - URL / email / terminal heuristics (row icon selection)
-
-    func testURLHeuristic() {
-        XCTAssertTrue(ClipboardItemRow.looksLikeURL("https://example.com"))
-        XCTAssertTrue(ClipboardItemRow.looksLikeURL("www.example.com"))
-        XCTAssertFalse(ClipboardItemRow.looksLikeURL("hello world"))
-        XCTAssertFalse(ClipboardItemRow.looksLikeURL("not a link"))
-    }
-
-    func testEmailHeuristic() {
-        XCTAssertTrue(ClipboardItemRow.looksLikeEmail("a@example.com"))
-        XCTAssertFalse(ClipboardItemRow.looksLikeEmail("a@b"))            // no dot in domain
-        XCTAssertFalse(ClipboardItemRow.looksLikeEmail("hello there"))    // no @
-        XCTAssertFalse(ClipboardItemRow.looksLikeEmail("a b@example.com")) // has a space
-    }
-
-    func testTerminalAppHeuristic() {
-        XCTAssertTrue(ClipboardItemRow.isTerminalApp("iTerm2"))
-        XCTAssertTrue(ClipboardItemRow.isTerminalApp("Ghostty"))
-        XCTAssertFalse(ClipboardItemRow.isTerminalApp("Safari"))
-    }
-
-    // MARK: - insert(): dedup, pin carry-forward, ordering
-
-    func testInsertDeduplicatesAndKeepsNewestOnTop() {
+    // 1. Pinned float above unpinned; order within each group is preserved.
+    func testFilteredItemsOrdering() {
         let m = makeManager()
-        m.insert(textItem("hello"))
-        m.insert(textItem("world"))
-        let newerHello = textItem("hello")
-        m.insert(newerHello)
-
-        XCTAssertEqual(m.items.count, 2, "duplicate text should collapse to one entry")
-        XCTAssertEqual(m.items.first?.id, newerHello.id, "newest copy floats to the top")
+        let a = textItem("a")
+        let b = textItem("b", pinned: true)
+        let c = textItem("c")
+        let d = textItem("d", pinned: true)
+        m.items = [a, b, c, d]
+        // pinned [b, d] first (items order), then unpinned [a, c] (items order).
+        XCTAssertEqual(m.filteredItems.map(\.textContent), ["b", "d", "a", "c"])
     }
 
-    func testInsertCarriesPinForward() {
+    // 2. Case-insensitive substring on displayText; empty -> all; no match -> empty.
+    func testFilteredItemsSearch() {
         let m = makeManager()
-        m.insert(textItem("keepme", pinned: true))
-        // Re-copying the same content (unpinned) must not silently drop the pin.
-        m.insert(textItem("keepme", pinned: false))
+        m.items = [textItem("Hello World"), textItem("goodbye"), textItem("HELLO there")]
+        XCTAssertEqual(m.filteredItems.count, 3, "empty search returns all")
 
+        m.searchText = "hello"
+        XCTAssertEqual(m.filteredItems.map(\.textContent), ["Hello World", "HELLO there"])
+
+        m.searchText = "zzz"
+        XCTAssertTrue(m.filteredItems.isEmpty, "no match returns empty")
+    }
+
+    // 3. Wrap-around navigation over filteredItems, plus edge entries.
+    func testMoveSelectionWrapAround() {
+        // Down past last wraps to first.
+        let down = makeManager()
+        let a = textItem("a"), b = textItem("b"), c = textItem("c")
+        down.items = [a, b, c]
+        down.selectedItemID = c.id
+        down.moveSelection(by: 1)
+        XCTAssertEqual(down.selectedItemID, a.id)
+
+        // Up past first wraps to last.
+        let up = makeManager()
+        up.items = [a, b, c]
+        up.selectedItemID = a.id
+        up.moveSelection(by: -1)
+        XCTAssertEqual(up.selectedItemID, c.id)
+
+        // Single item: either direction stays put.
+        let single = makeManager()
+        single.items = [a]
+        single.selectedItemID = a.id
+        single.moveSelection(by: 1)
+        XCTAssertEqual(single.selectedItemID, a.id)
+        single.moveSelection(by: -1)
+        XCTAssertEqual(single.selectedItemID, a.id)
+
+        // Empty list clears the selection.
+        let empty = makeManager()
+        empty.selectedItemID = UUID()
+        empty.moveSelection(by: 1)
+        XCTAssertNil(empty.selectedItemID)
+
+        // No selection: +delta enters at first, -delta enters at last.
+        let entryFirst = makeManager()
+        entryFirst.items = [a, b, c]
+        entryFirst.moveSelection(by: 1)
+        XCTAssertEqual(entryFirst.selectedItemID, a.id)
+
+        let entryLast = makeManager()
+        entryLast.items = [a, b, c]
+        entryLast.moveSelection(by: -1)
+        XCTAssertEqual(entryLast.selectedItemID, c.id)
+    }
+
+    // 4. Deleting the selected row moves the highlight sensibly.
+    func testDeleteItemReselection() {
+        let a = textItem("a"), b = textItem("b"), c = textItem("c")
+
+        // Middle selected -> following row.
+        let mid = makeManager()
+        mid.items = [a, b, c]
+        mid.selectedItemID = b.id
+        mid.deleteItem(b)
+        XCTAssertEqual(mid.selectedItemID, c.id)
+
+        // Last selected -> new last row.
+        let last = makeManager()
+        last.items = [a, b, c]
+        last.selectedItemID = c.id
+        last.deleteItem(c)
+        XCTAssertEqual(last.selectedItemID, b.id)
+
+        // Only row selected -> nil.
+        let only = makeManager()
+        only.items = [a]
+        only.selectedItemID = a.id
+        only.deleteItem(a)
+        XCTAssertNil(only.selectedItemID)
+        XCTAssertTrue(only.items.isEmpty)
+    }
+
+    // 5. Deleting a pinned item is a no-op.
+    func testDeleteItemPinnedProtection() {
+        let m = makeManager()
+        let p = textItem("p", pinned: true)
+        m.items = [p]
+        m.deleteItem(p)
         XCTAssertEqual(m.items.count, 1)
-        XCTAssertTrue(m.items.first?.pinned == true, "pin carries forward onto the newer duplicate")
+        XCTAssertTrue(m.items.contains { $0.id == p.id })
     }
 
-    func testOrderedItemsFloatsPinnedToTop() {
+    // 6. Toggling pin floats an item to the top of orderedItems; toggling again returns it.
+    func testTogglePinFloatsAndReturns() {
         let m = makeManager()
-        m.insert(textItem("pinned-old", pinned: true))
-        m.insert(textItem("newer-unpinned"))   // inserted at index 0
+        let a = textItem("a"), b = textItem("b"), c = textItem("c")
+        m.items = [a, b, c]
+        XCTAssertEqual(m.orderedItems.map(\.textContent), ["a", "b", "c"])
 
-        XCTAssertEqual(m.items.first?.textContent, "newer-unpinned", "raw items stay recency-ordered")
-        XCTAssertEqual(m.orderedItems.first?.textContent, "pinned-old", "display order floats pins up")
+        m.togglePin(c)
+        XCTAssertEqual(m.orderedItems.map(\.textContent), ["c", "a", "b"])
+
+        m.togglePin(c)
+        XCTAssertEqual(m.orderedItems.map(\.textContent), ["a", "b", "c"])
     }
 
-    func testTrimDropsOldestUnpinnedButKeepsPinned() {
-        let key = "maxItems"
-        let saved = UserDefaults.standard.object(forKey: key)
-        defer { UserDefaults.standard.set(saved, forKey: key) }
-
+    // 7. A selection filtered out by a new searchText is cleared; one still shown is kept.
+    func testSearchTextClearsFilteredOutSelection() {
         let m = makeManager()
-        m.maxItems = 3
-        m.insert(textItem("PIN", pinned: true))
-        for i in 0..<5 { m.insert(textItem("item-\(i)")) }
+        let apple = textItem("apple"), banana = textItem("banana")
+        m.items = [apple, banana]
+
+        m.selectedItemID = banana.id
+        m.searchText = "app"                 // banana filtered out
+        XCTAssertNil(m.selectedItemID)
+
+        m.selectedItemID = apple.id
+        m.searchText = "apple"               // apple still visible
+        XCTAssertEqual(m.selectedItemID, apple.id)
+    }
+
+    // 8. insert() caps unpinned to maxItems (newest kept); pinned items are exempt.
+    func testMaxItemsCapUnpinnedNewestKeptPinnedExempt() {
+        let m = makeManager()
+        m.maxItems = 2
+        let pinned = textItem("pinned", pinned: true)
+        m.items = [pinned]
+
+        // Insert four distinct unpinned items (distinct content avoids dedup collapse).
+        for i in 0..<4 { m.insert(textItem("u\(i)")) }
 
         let unpinned = m.items.filter { !$0.pinned }
-        XCTAssertEqual(unpinned.count, 3, "window trims oldest unpinned down to maxItems")
-        XCTAssertEqual(m.items.filter { $0.pinned }.count, 1, "pinned item is exempt from trimming")
-    }
-
-    // MARK: - Auto-paste decision
-
-    func testAutoPasteActionRequiresEnabledTrustedAndNotSelf() {
-        XCTAssertEqual(AutoPaste.action(autoPasteEnabled: true, trusted: true, targetIsSelf: false), .autoPaste)
-        // Any one condition failing falls back to copy-only (never a silent no-op).
-        XCTAssertEqual(AutoPaste.action(autoPasteEnabled: false, trusted: true, targetIsSelf: false), .copyOnly)
-        XCTAssertEqual(AutoPaste.action(autoPasteEnabled: true, trusted: false, targetIsSelf: false), .copyOnly)
-        XCTAssertEqual(AutoPaste.action(autoPasteEnabled: true, trusted: true, targetIsSelf: true), .copyOnly)
-    }
-
-    // MARK: - Syntax highlighting
-
-    func testSyntaxTokenizerClassifiesSpans() {
-        let code = "func greet() {\n    let n = 42 // count\n    return \"hi\"\n}"
-        let kinds = SyntaxHighlighter.tokens(in: code).map(\.kind)
-        XCTAssertTrue(kinds.contains(.keyword), "func/let/return should be keywords")
-        XCTAssertTrue(kinds.contains(.number), "42 should be a number")
-        XCTAssertTrue(kinds.contains(.comment), "// count should be a comment")
-        XCTAssertTrue(kinds.contains(.string), "\"hi\" should be a string")
-    }
-
-    func testSyntaxTokenizerLeavesProseAlone() {
-        // No code tokens in ordinary prose (the number is the only classified span).
-        let kinds = SyntaxHighlighter.tokens(in: "just some words here").map(\.kind)
-        XCTAssertTrue(kinds.isEmpty)
+        XCTAssertEqual(unpinned.map(\.textContent), ["u3", "u2"], "newest unpinned kept, oldest trimmed")
+        XCTAssertTrue(m.items.contains { $0.id == pinned.id }, "pinned item exempt from cap")
     }
 }

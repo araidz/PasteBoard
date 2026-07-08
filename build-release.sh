@@ -13,8 +13,8 @@ cd "$(dirname "$0")"
 
 APP_NAME="PasteBoard"
 BUNDLE_ID="com.local.pasteboard"
-VERSION="${1:-1.2}"
-BUILD="${2:-3}"
+VERSION="${1:-2.0}"
+BUILD="${2:-6}"
 
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
@@ -61,7 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleVersion</key>
 	<string>$BUILD</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>13.0</string>
+	<string>14.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSHighResolutionCapable</key>

@@ -1,6 +1,13 @@
 import Cocoa
 import SwiftUI
 
+// App-internal notifications: a capture happened (menu-bar icon flash, later phase)
+// and the panel became visible (focus the search field).
+extension Notification.Name {
+    static let clipboardDidCapture = Notification.Name("clipboardDidCapture")
+    static let panelDidShow = Notification.Name("panelDidShow")
+}
+
 enum ClipboardItemType: String, Codable {
     case text
     case code
@@ -85,7 +92,14 @@ class ClipboardManager: ObservableObject {
         didSet { cachedOrdered = nil; cachedFiltered = nil }
     }
     @Published var searchText: String = "" {
-        didSet { cachedFiltered = nil }
+        didSet {
+            cachedFiltered = nil
+            // A filtered-out row must not stay selected — Enter would paste something
+            // not on screen. Drop the highlight; Enter then falls back to the first match.
+            if let id = selectedItemID, !filteredItems.contains(where: { $0.id == id }) {
+                selectedItemID = nil
+            }
+        }
     }
     // Currently highlighted row, driven by keyboard navigation / clicks.
     @Published var selectedItemID: UUID?
@@ -156,6 +170,8 @@ class ClipboardManager: ObservableObject {
             appDir = baseDirectory
         } else {
             let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            // App-support dir for history + images. The shared bundle id keeps the
+            // Accessibility grant across updates.
             appDir = appSupport.appendingPathComponent("PasteBoard")
         }
         imageStorageURL = appDir.appendingPathComponent("Images")
@@ -371,6 +387,15 @@ class ClipboardManager: ObservableObject {
         lastChangeCount = pasteboard.changeCount
     }
 
+    /// Put plain text on the clipboard — used to paste a file's path into a terminal,
+    /// which can't accept a file-url. Guards re-capture like the other paste methods.
+    func pasteText(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+        lastChangeCount = pasteboard.changeCount
+    }
+
     /// Toggle the pinned state of an item, then re-persist.
     func togglePin(_ item: ClipboardItem) {
         guard let index = items.firstIndex(where: { $0.id == item.id }) else { return }
@@ -381,7 +406,17 @@ class ClipboardManager: ObservableObject {
     func deleteItem(_ item: ClipboardItem) {
         // Pinned items can't be accidentally deleted — unpin first.
         guard !item.pinned else { return }
-        if selectedItemID == item.id { selectedItemID = nil }
+        // Move the highlight to the row that slides up into its place (or the new last
+        // row if it was at the end) so the selection follows the deletion.
+        if selectedItemID == item.id {
+            let list = filteredItems
+            if let idx = list.firstIndex(where: { $0.id == item.id }) {
+                let next = idx + 1 < list.count ? list[idx + 1] : (idx > 0 ? list[idx - 1] : nil)
+                selectedItemID = next?.id
+            } else {
+                selectedItemID = nil
+            }
+        }
         items.removeAll { $0.id == item.id }   // instant UI update
         removeFiles([item.imagePath].compactMap { $0 })
         saveItems()
@@ -414,7 +449,9 @@ class ClipboardManager: ObservableObject {
             return
         }
         if let currentIndex = list.firstIndex(where: { $0.id == selectedItemID }) {
-            let newIndex = max(0, min(list.count - 1, currentIndex + delta))
+            // Wrap around: past the last row jumps to the first, and vice-versa.
+            let count = list.count
+            let newIndex = ((currentIndex + delta) % count + count) % count
             selectedItemID = list[newIndex].id
         } else {
             // Nothing selected yet: enter from the appropriate end.

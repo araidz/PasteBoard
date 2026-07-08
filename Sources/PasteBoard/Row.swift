@@ -85,259 +85,6 @@ private struct ThumbnailView: View {
     }
 }
 
-struct ClipboardHistoryView: View {
-    @ObservedObject var manager: ClipboardManager
-    var onCommit: (ClipboardItem) -> Void = { _ in }
-    var onCommitPath: (String) -> Void = { _ in }
-    // Settings actions, surfaced in the header's gear menu (no more menu-bar menu).
-    var onToggleLaunchAtLogin: () -> Void = {}
-    var isLaunchAtLogin: () -> Bool = { false }
-    var onToggleAutoPaste: () -> Void = {}
-    var isAutoPasteOn: () -> Bool = { true }
-    var onEnableAccessibility: () -> Void = {}
-    var isTrusted: () -> Bool = { false }
-    var onQuit: () -> Void = {}
-    @FocusState private var searchFocused: Bool
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack(spacing: 8) {
-                Text("PasteBoard")
-                    .font(.headline)
-                    .fontWeight(.semibold)
-                Spacer()
-                // Count badge — reflects the list shown (matches an active search).
-                Text("\(manager.filteredItems.count)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
-                Menu {
-                    Button((isLaunchAtLogin() ? "✓ " : "") + "Launch at Login", action: onToggleLaunchAtLogin)
-                    Button((isAutoPasteOn() ? "✓ " : "") + "Paste Directly Into App", action: onToggleAutoPaste)
-                    if isTrusted() {
-                        Text("Accessibility Enabled")
-                    } else {
-                        Button("Enable Accessibility…", action: onEnableAccessibility)
-                    }
-                    Menu("History Limit") {
-                        ForEach([50, 100, 200, 500, 1000], id: \.self) { n in
-                            Button((manager.maxItems == n ? "✓ " : "") + "\(n) items") { manager.maxItems = n }
-                        }
-                    }
-                    Divider()
-                    Button("Quit PasteBoard", action: onQuit)
-                } label: {
-                    Image(systemName: "gearshape").foregroundColor(.secondary)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-
-            // Search — always visible; focused automatically when the panel opens.
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                    .font(.caption)
-                TextField("Search...", text: $manager.searchText)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .focused($searchFocused)
-                if !manager.searchText.isEmpty {
-                    Button(action: { manager.searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                            .font(.caption)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Clear search")
-                }
-            }
-            .padding(8)
-            .background(Color(nsColor: .controlBackgroundColor))
-            .cornerRadius(6)
-            .padding(.horizontal, 12)
-            .padding(.bottom, 8)
-
-            Divider()
-
-            // Clipboard items list
-            if manager.filteredItems.isEmpty {
-                VStack(spacing: 8) {
-                    Spacer()
-                    Image(systemName: "clipboard")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary)
-                    Text(manager.searchText.isEmpty ? "No items yet" : "No matches")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                    Text(manager.searchText.isEmpty ? "Copy something to get started" : "Try a different search")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                    if manager.searchText.isEmpty {
-                        Text("Press ⌥⌘V anywhere to open")
-                            .font(.caption2)
-                            .foregroundColor(Color.secondary.opacity(0.7))
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 1) {
-                            ForEach(Array(manager.filteredItems.enumerated()), id: \.element.id) { index, item in
-                                if let label = sectionLabel(at: index) {
-                                    sectionHeader(label)
-                                }
-                                ClipboardItemRow(
-                                    item: item,
-                                    isSelected: manager.selectedItemID == item.id,
-                                    shortcutIndex: index < 9 ? index + 1 : nil,
-                                    onPaste: { onCommit(item) },
-                                    onSelect: { manager.selectedItemID = item.id },
-                                    onPastePath: { path in onCommitPath(path) }
-                                )
-                                .equatable()
-                                .id(item.id)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                        // Small trailing inset so the overlay scroller floats clear of the text.
-                        .padding(.trailing, 4)
-                        // Force a thin, auto-hiding overlay scroller.
-                        .background(ScrollerConfigurator())
-                    }
-                    // Keep the keyboard-selected row visible as it moves.
-                    .onChange(of: manager.selectedItemID) { newValue in
-                        guard let id = newValue else { return }
-                        proxy.scrollTo(id, anchor: .center)
-                    }
-                }
-            }
-            Divider()
-            // Footer — keyboard hints + Clear all (the one history action kept here).
-            HStack(spacing: 0) {
-                Text("⏎ paste · ⌘P pin · ⌘⌫ delete")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                Spacer()
-                Button(action: { manager.clearAll() }) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "trash")
-                        Text("Clear all")
-                    }
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Clear all (keeps pinned)")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
-        }
-        // No fixed size — the window drives the size; these are sensible minimums.
-        .frame(minWidth: 260, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
-        // Render on the same surface the system uses for menus so the panel matches
-        // their shade and translucency (Liquid Glass on macOS 26+, the classic menu
-        // material on older systems). See MenuSurface.
-        .modifier(MenuSurface())
-        .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
-            searchFocused = true
-        }
-    }
-
-    // Section label for the row at `index`: "Pinned" atop pinned items, "Recent"
-    // at the first unpinned item. nil elsewhere (no header).
-    private func sectionLabel(at index: Int) -> String? {
-        let items = manager.filteredItems
-        if index == 0 { return items[index].pinned ? "Pinned" : "Recent" }
-        if !items[index].pinned && items[index - 1].pinned { return "Recent" }
-        return nil
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.secondary)
-            Spacer()
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 6)
-        .padding(.bottom, 2)
-    }
-
-}
-
-/// The panel's background surface, matched to whatever the OS uses for real menus.
-///
-/// On macOS 26+ the panel is hosted inside an `NSGlassEffectView` (see AppDelegate),
-/// which provides the genuine Liquid Glass material, rounded corners, and shadow as
-/// a single unit — so here we add nothing and just let the content draw on it.
-/// Earlier releases that predate Liquid Glass fall back to the classic `.menu`
-/// vibrancy material with a clip and a hairline border.
-private struct MenuSurface: ViewModifier {
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: 13, style: .continuous) }
-
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content
-        } else {
-            content
-                .background(VisualEffectView(material: .menu))
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(Color(nsColor: .separatorColor), lineWidth: 0.5))
-        }
-    }
-}
-
-/// Native translucent menu material so the panel matches system menus
-/// (Wi-Fi / Control Center) instead of a flat, opaque background. Used as the
-/// pre-Liquid-Glass fallback in MenuSurface.
-private struct VisualEffectView: NSViewRepresentable {
-    var material: NSVisualEffectView.Material = .menu
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = material
-        view.blendingMode = .behindWindow
-        // Always render the active (not the dimmed inactive) material, like an open
-        // menu. Left un-emphasized so it matches a stock menu's exact shade.
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
-        nsView.material = material
-    }
-}
-
-/// Forces the enclosing NSScrollView to use a thin, auto-hiding overlay scroller
-/// so the scroll bar no longer overlaps the row controls.
-private struct ScrollerConfigurator: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async {
-            guard let scrollView = view.enclosingScrollView else { return }
-            scrollView.scrollerStyle = .overlay
-            scrollView.autohidesScrollers = true
-            scrollView.verticalScroller?.controlSize = .small
-            scrollView.scrollerInsets = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {}
-}
-
 // Memoizes the icon for an extension — the lookup (especially the UTType
 // fallback) is pure in `ext`, and extensions repeat heavily across a history.
 // Touched only from the main thread during view rendering.
@@ -516,23 +263,14 @@ private struct ClickCatcher: NSViewRepresentable {
     }
 }
 
-struct ClipboardItemRow: View, Equatable {
+struct ClipboardItemRow: View {
     let item: ClipboardItem
     let isSelected: Bool
     // 1–9 for the first nine rows → shows a ⌘N quick-paste hint. nil otherwise.
     var shortcutIndex: Int? = nil
     let onPaste: () -> Void
-    var onSelect: () -> Void = {}
     // Paste a single member of a multi-file group. Unused for non-group rows.
     var onPastePath: (String) -> Void = { _ in }
-
-    // Only the data that affects rendering matters — the closures are recreated on
-    // every parent render but don't change what's drawn. Comparing just `item` and
-    // `isSelected` lets SwiftUI skip re-rendering every visible row when one pin /
-    // delete mutates the list; only the row that actually changed re-renders.
-    static func == (lhs: ClipboardItemRow, rhs: ClipboardItemRow) -> Bool {
-        lhs.item == rhs.item && lhs.isSelected == rhs.isSelected && lhs.shortcutIndex == rhs.shortcutIndex
-    }
 
     // Multi-file groups can be expanded to reveal their members.
     @State private var expanded = false
@@ -544,44 +282,28 @@ struct ClipboardItemRow: View, Equatable {
     private var secondaryColor: Color { isHighlighted ? Color.white.opacity(0.85) : .secondary }
 
     // Uniform size for the leading icon tile / thumbnail.
-    static let iconSize: CGFloat = 28
+    static let iconSize: CGFloat = 24
 
-    /// The leading tile: a thumbnail for images, a colour swatch for hex colours,
-    /// otherwise a colour-coded rounded square with a category glyph.
+    /// The leading glyph: a thumbnail for images, a colour swatch for hex colours,
+    /// otherwise a flat system SF Symbol for the content/file category.
     @ViewBuilder
     private var iconTile: some View {
         if let path = thumbnailPath {
             ThumbnailView(path: path, size: Self.iconSize)
         } else if let swatch = swatchColor {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(swatch)
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(Color.white.opacity(0.25)))
+                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(Color.primary.opacity(0.15)))
                 .frame(width: Self.iconSize, height: Self.iconSize)
         } else {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(iconTint.gradient)
+            // Flat, system-style glyph — no coloured tile behind it.
+            Image(systemName: iconName)
+                .font(.system(size: 15))
+                .foregroundColor(isHighlighted ? .white : .secondary)
                 .frame(width: Self.iconSize, height: Self.iconSize)
-                .overlay(
-                    Image(systemName: iconName)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Color.white)
-                )
         }
     }
 
-    /// Tile background colour, keyed to the content/file category.
-    private var iconTint: Color {
-        switch item.type {
-        case .image: return Color(nsColor: .systemTeal)
-        case .folder: return Color(nsColor: .systemOrange)
-        case .file: return Self.tint(forSymbol: fileIconName(forPath: item.filePaths?.first))
-        case .text, .code:
-            if let app = item.sourceApp, Self.isTerminalApp(app) { return Color(nsColor: .systemGray) }
-            let text = (item.textContent ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if Self.looksLikeURL(text) || Self.looksLikeEmail(text) { return Color(nsColor: .systemBlue) }
-            return item.type == .code ? Color(nsColor: .systemIndigo) : Color(nsColor: .systemGray)
-        }
-    }
 
     /// A lone hex-colour string renders as a colour swatch tile.
     private var swatchColor: Color? {
@@ -624,7 +346,7 @@ struct ClipboardItemRow: View, Equatable {
     // MARK: - Single (non-group) row
 
     private var singleRow: some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 7) {
             iconTile
 
             // Content preview
@@ -636,7 +358,7 @@ struct ClipboardItemRow: View, Equatable {
             Spacer(minLength: 0)
             shortcutBadge
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
@@ -658,26 +380,17 @@ struct ClipboardItemRow: View, Equatable {
     }
 
     private var groupHeader: some View {
-        HStack(spacing: 5) {
-            // Disclosure chevron — always visible; toggles the member list.
-            Button(action: { withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() } }) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundColor(secondaryColor)
-                    .frame(width: 12)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(expanded ? "Collapse" : "Expand")
+        HStack(spacing: 7) {
+            // Disclosure chevron — reflects state; single-click the row toggles it.
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundColor(secondaryColor)
+                .frame(width: 12)
 
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color(nsColor: .systemOrange).gradient)
+            Image(systemName: item.type == .folder ? "folder" : "doc.on.doc")
+                .font(.system(size: 15))
+                .foregroundColor(isHighlighted ? .white : .secondary)
                 .frame(width: Self.iconSize, height: Self.iconSize)
-                .overlay(
-                    Image(systemName: item.type == .folder ? "folder.fill" : "doc.on.doc.fill")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.white)
-                )
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
@@ -702,12 +415,15 @@ struct ClipboardItemRow: View, Equatable {
             Spacer(minLength: 0)
             shortcutBadge
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, 8)
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click pastes the whole group; single click does nothing.
-        .overlay(ClickCatcher { if $0 >= 2 { onPaste() } })
+        // Double-click pastes the whole group; single click toggles expand.
+        .overlay(ClickCatcher { count in
+            if count >= 2 { onPaste() }
+            else { withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() } }
+        })
     }
 
     // MARK: - Shared pieces
@@ -808,23 +524,6 @@ struct ClipboardItemRow: View, Equatable {
                      blue: Double(v & 0xff) / 255)
     }
 
-    /// Category colour for a resolved file glyph, so file tiles are colour-coded.
-    static func tint(forSymbol symbol: String) -> Color {
-        switch symbol {
-        case "photo": return Color(nsColor: .systemTeal)
-        case "doc.richtext": return Color(nsColor: .systemRed)
-        case "doc.zipper": return Color(nsColor: .systemBrown)
-        case "tablecells": return Color(nsColor: .systemGreen)
-        case "rectangle.on.rectangle": return Color(nsColor: .systemOrange)
-        case "music.note", "paintpalette": return Color(nsColor: .systemPink)
-        case "film": return Color(nsColor: .systemPurple)
-        case "chevron.left.forwardslash.chevron.right", "curlybraces": return Color(nsColor: .systemIndigo)
-        case "book", "textformat": return Color(nsColor: .systemBrown)
-        case "app", "person.crop.square", "doc.plaintext", "doc.text": return Color(nsColor: .systemBlue)
-        case "calendar": return Color(nsColor: .systemRed)
-        default: return Color(nsColor: .systemGray)
-        }
-    }
 
     @ViewBuilder
     var contentPreview: some View {
