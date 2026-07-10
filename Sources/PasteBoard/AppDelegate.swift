@@ -214,6 +214,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let window = self.window, window.isVisible else { return event }
+
+            // ⌘Y always toggles Quick Look — checked first so a second press closes it
+            // even while it's the key window (below, QL otherwise owns the keyboard).
+            if event.modifierFlags.contains(.command), event.keyCode == 16 {
+                self.togglePreview()
+                return nil
+            }
             if let ql = QLPreviewPanel.shared(), ql.isKeyWindow { return event }
             let list = self.clipboardManager.filteredItems
 
@@ -229,9 +236,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 case 51:  // ⌫ — delete the highlighted row (pinned rows are protected)
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.deleteItem(item) }
-                    return nil
-                case 16:  // Y — Quick Look preview of the highlighted row (Finder's own QL shortcut)
-                    self.togglePreview()
                     return nil
                 default:
                     return event
