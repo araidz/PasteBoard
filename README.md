@@ -6,7 +6,7 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 
 - ⌨️ **⌥⌘V anywhere** — a global hotkey opens your history over any app, search focused
 - ⚡ **Auto-paste** — pick an item and it lands in the app you were typing in (needs Accessibility; falls back to copy-only)
-- 🔢 **⌘1–9 quick paste** — grab the top nine items by number, **⌘Y** Quick Look-previews the highlighted one
+- 🔢 **⌘1–9 quick paste** — grab the top nine items by number, **⌘Y** previews the full content of the highlighted one
 - 📋 **History** for text, code, images, and files/folders
 - 🔍 **Instant search** across everything you've copied
 - 📌 **Pin** the items you reuse so they stay at the top

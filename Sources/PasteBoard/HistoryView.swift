@@ -29,6 +29,12 @@ struct HistoryView: View {
             footer
         }
         .frame(width: 290, height: 520)
+        .overlay {
+            if manager.isPreviewing, let item = manager.selectedItem {
+                PreviewOverlay(item: item) { manager.isPreviewing = false }
+                    .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = true
         }

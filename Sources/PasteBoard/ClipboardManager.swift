@@ -104,6 +104,9 @@ class ClipboardManager: ObservableObject {
     }
     // Currently highlighted row, driven by keyboard navigation / clicks.
     @Published var selectedItemID: UUID?
+    // Whether the full-content preview overlay is showing (⌘Y). Tracks
+    // selectedItemID live, so arrow keys keep updating it while it's open.
+    @Published var isPreviewing: Bool = false
 
     private var lastChangeCount: Int = 0
     // Rolling-window size for unpinned items, user-adjustable from the menu and

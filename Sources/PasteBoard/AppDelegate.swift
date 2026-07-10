@@ -2,7 +2,6 @@ import Cocoa
 import SwiftUI
 import Carbon.HIToolbox
 import ServiceManagement
-import Quartz
 
 // The app delegate: menu-bar item, global ⌥⌘V hotkey, the clipboard-capture timer,
 // the floating history panel, keyboard navigation, and commit → auto-paste.
@@ -198,6 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         clipboardManager.selectedItemID = nil
         clipboardManager.searchText = ""       // fresh, unfiltered list on each open
+        clipboardManager.isPreviewing = false
         if lastOpenFromIcon { positionUnderIcon(w) } else { positionNearCursor(w) }
         w.makeKeyAndOrderFront(nil)
         // Focus the search field once the panel is key (next runloop).
@@ -214,14 +214,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func installKeyMonitor() {
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, let window = self.window, window.isVisible else { return event }
-
-            // ⌘Y always toggles Quick Look — checked first so a second press closes it
-            // even while it's the key window (below, QL otherwise owns the keyboard).
-            if event.modifierFlags.contains(.command), event.keyCode == 16 {
-                self.togglePreview()
-                return nil
-            }
-            if let ql = QLPreviewPanel.shared(), ql.isKeyWindow { return event }
             let list = self.clipboardManager.filteredItems
 
             // ⌘-shortcuts: ⌘1–9 quick-paste the Nth visible row, ⌘P pin/unpin, ⌘⌫ delete.
@@ -237,6 +229,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case 51:  // ⌫ — delete the highlighted row (pinned rows are protected)
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.deleteItem(item) }
                     return nil
+                case 16:  // Y — toggle the full-content preview overlay
+                    self.clipboardManager.isPreviewing.toggle()
+                    return nil
                 default:
                     return event
                 }
@@ -250,55 +245,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.commit(item); return nil
                 }
                 return event
-            case 53: self.closeWindow(); return nil            // esc
+            case 53:                                                           // esc
+                if self.clipboardManager.isPreviewing { self.clipboardManager.isPreviewing = false }
+                else { self.closeWindow() }
+                return nil
             default: return event
             }
-        }
-    }
-
-    // MARK: - Quick Look preview
-
-    /// ⌘Y — Finder's own alternate Quick Look shortcut. Bare Space is already the
-    /// search field's text-entry key here, and ⌘Space fights Spotlight, so this is
-    /// the one binding that's actually free.
-    private func togglePreview() {
-        guard let panel = QLPreviewPanel.shared() else { return }
-        if panel.isVisible {
-            panel.orderOut(nil)
-            return
-        }
-        guard clipboardManager.selectedItem != nil else { return }
-        panel.dataSource = self
-        panel.delegate = self
-        panel.reloadData()
-        panel.makeKeyAndOrderFront(nil)
-    }
-
-    /// The highlighted row's content as file URLs Quick Look can show. Images and
-    /// files/folders already live on disk; text/code has no file of its own, so it's
-    /// written to a scratch file that's overwritten on every preview.
-    private func previewURLs() -> [URL] {
-        guard let item = clipboardManager.selectedItem else { return [] }
-        switch item.type {
-        case .image:
-            return [item.imagePath].compactMap { $0 }.map(URL.init(fileURLWithPath:))
-        case .file, .folder:
-            return (item.filePaths ?? []).map(URL.init(fileURLWithPath:))
-        case .text, .code:
-            guard let text = item.textContent, let url = writePreviewTextFile(text) else { return [] }
-            return [url]
-        }
-    }
-
-    private func writePreviewTextFile(_ text: String) -> URL? {
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("PasteBoardPreview", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("preview.txt")
-        do {
-            try text.write(to: url, atomically: true, encoding: .utf8)
-            return url
-        } catch {
-            return nil
         }
     }
 
@@ -369,26 +321,3 @@ final class FloatingPanel: NSPanel {
     override var canBecomeMain: Bool { true }
 }
 
-extension AppDelegate: QLPreviewPanelDataSource {
-    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
-        previewURLs().count
-    }
-
-    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
-        previewURLs()[index] as NSURL
-    }
-}
-
-extension AppDelegate: QLPreviewPanelDelegate {
-    /// Quick Look owns its own key window's event loop — our local monitor in
-    /// installKeyMonitor() never sees keys pressed while it's key. This delegate
-    /// hook is QuickLookUI's own escape hatch for exactly that: intercept ⌘Y here
-    /// so a second press closes the panel instead of beeping as an unhandled key.
-    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
-        guard event.type == .keyDown, event.modifierFlags.contains(.command), event.keyCode == 16 else {
-            return false
-        }
-        togglePreview()
-        return true
-    }
-}
