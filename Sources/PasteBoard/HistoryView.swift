@@ -35,6 +35,11 @@ struct HistoryView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
             }
         }
+        // Rapid ⌘Y/search toggling swaps whole view subtrees (overlay, list's
+        // empty-vs-populated branch) back to back; SwiftUI's default implicit
+        // transition tried to animate each swap and piled up into a runaway
+        // layout loop under fast alternation. No animation, no pileup.
+        .transaction { $0.disablesAnimations = true }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = true
         }

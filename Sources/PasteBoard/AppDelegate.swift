@@ -245,6 +245,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.commit(item); return nil
                 }
                 return event
+            case 49 where self.clipboardManager.isPreviewing:              // space — closes preview
+                self.clipboardManager.isPreviewing = false
+                return nil
             case 53:                                                           // esc
                 if self.clipboardManager.isPreviewing { self.clipboardManager.isPreviewing = false }
                 else { self.closeWindow() }
