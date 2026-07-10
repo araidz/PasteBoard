@@ -1,12 +1,17 @@
 import XCTest
 @testable import PasteBoard
+import CryptoKit
 
 final class PasteBoardTests: XCTestCase {
 
-    // Fresh, isolated storage per manager so nothing touches real history.
+    // Fresh, isolated storage per manager so nothing touches real history — and an
+    // in-memory key so tests never read/write the real login Keychain.
+    private static let ephemeralKey = SymmetricKey(size: .bits256)
     private func makeManager() -> ClipboardManager {
-        ClipboardManager(baseDirectory: FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString))
+        ClipboardManager(
+            baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+            keyProvider: { Self.ephemeralKey }
+        )
     }
 
     // Distinct ids (selection/dedup) and monotonic timestamps per built item.
@@ -168,5 +173,56 @@ final class PasteBoardTests: XCTestCase {
         let unpinned = m.items.filter { !$0.pinned }
         XCTAssertEqual(unpinned.map(\.textContent), ["u3", "u2"], "newest unpinned kept, oldest trimmed")
         XCTAssertTrue(m.items.contains { $0.id == pinned.id }, "pinned item exempt from cap")
+    }
+
+    // 9. EncryptedStore round-trips data, and the ciphertext doesn't contain the
+    //    plaintext (proves it's actually encrypted, not just re-encoded).
+    func testEncryptedStoreRoundTrip() throws {
+        let key = SymmetricKey(size: .bits256)
+        let secret = "correct horse battery staple"
+        let plaintext = Data(secret.utf8)
+
+        let ciphertext = try EncryptedStore.encrypt(plaintext, key: key)
+        XCTAssertFalse(String(data: ciphertext, encoding: .utf8)?.contains(secret) ?? false)
+
+        let decrypted = try EncryptedStore.decrypt(ciphertext, key: key)
+        XCTAssertEqual(decrypted, plaintext)
+
+        XCTAssertThrowsError(try EncryptedStore.decrypt(ciphertext, key: SymmetricKey(size: .bits256)),
+                              "wrong key must not decrypt")
+    }
+
+    // 10. A saved history is encrypted on disk, and reloads through a fresh
+    //     ClipboardManager pointed at the same storage dir + key.
+    func testHistoryPersistsEncryptedAndReloads() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let key = SymmetricKey(size: .bits256)
+        let secret = "super-secret-token-\(UUID().uuidString)"
+
+        let writer = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+        writer.insert(textItem(secret))
+
+        let saved = expectation(description: "debounced save lands on disk")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { saved.fulfill() }
+        wait(for: [saved], timeout: 2)
+
+        let onDisk = try Data(contentsOf: dir.appendingPathComponent("history.json"))
+        XCTAssertFalse(String(data: onDisk, encoding: .utf8)?.contains(secret) ?? false,
+                        "history.json must not contain the plaintext secret")
+
+        let reader = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+        XCTAssertTrue(reader.items.contains { $0.textContent == secret })
+    }
+
+    // 11. Histories written before encryption existed (plain JSON) still load —
+    //     upgrading the app must not strand existing users' history.
+    func testLegacyPlaintextHistoryStillLoads() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let legacyItem = textItem("pre-encryption-item")
+        try JSONEncoder().encode([legacyItem]).write(to: dir.appendingPathComponent("history.json"))
+
+        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { SymmetricKey(size: .bits256) })
+        XCTAssertTrue(manager.items.contains { $0.textContent == "pre-encryption-item" })
     }
 }

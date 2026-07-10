@@ -1,4 +1,5 @@
 import Cocoa
+import CryptoKit
 import SwiftUI
 
 // App-internal notifications: a capture happened (menu-bar icon flash, later phase)
@@ -118,6 +119,7 @@ class ClipboardManager: ObservableObject {
     private let storageURL: URL          // unpinned history
     private let pinnedStorageURL: URL    // pinned items, persisted separately
     private let imageStorageURL: URL
+    private let historyKey: SymmetricKey
     // All disk writes/deletions run here so pin/delete update the UI instantly.
     private let ioQueue = DispatchQueue(label: "com.local.pasteboard.io", qos: .utility)
     // Coalesces rapid mutations (e.g. repeated pin toggles) into a single write.
@@ -164,7 +166,7 @@ class ClipboardManager: ObservableObject {
     }
 
     /// `baseDirectory` lets tests redirect storage away from Application Support.
-    init(baseDirectory: URL? = nil) {
+    init(baseDirectory: URL? = nil, keyProvider: () throws -> SymmetricKey = EncryptedStore.persistentKey) {
         let appDir: URL
         if let baseDirectory {
             appDir = baseDirectory
@@ -180,6 +182,15 @@ class ClipboardManager: ObservableObject {
 
         // Create directories
         try? FileManager.default.createDirectory(at: imageStorageURL, withIntermediateDirectories: true)
+
+        do {
+            historyKey = try keyProvider()
+        } catch {
+            // Keychain unavailable (rare): fall back to a session-only key so the app
+            // still runs — history just won't survive a restart decryptable.
+            NSLog("PasteBoard: history key unavailable, using a session-only key — \(error.localizedDescription)")
+            historyKey = SymmetricKey(size: .bits256)
+        }
 
         loadItems()
         lastChangeCount = NSPasteboard.general.changeCount
@@ -469,11 +480,14 @@ class ClipboardManager: ObservableObject {
         let unpinned = items.filter { !$0.pinned }
         let storageURL = self.storageURL
         let pinnedStorageURL = self.pinnedStorageURL
+        let historyKey = self.historyKey
         pendingSave?.cancel()
         let work = DispatchWorkItem {
             do {
-                try JSONEncoder().encode(unpinned).write(to: storageURL)
-                try JSONEncoder().encode(pinned).write(to: pinnedStorageURL)
+                let unpinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
+                let pinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: historyKey)
+                try unpinnedData.write(to: storageURL)
+                try pinnedData.write(to: pinnedStorageURL)
             } catch {
                 NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
             }
@@ -486,14 +500,22 @@ class ClipboardManager: ObservableObject {
         var pinned: [ClipboardItem] = []
         var unpinned: [ClipboardItem] = []
         if let data = try? Data(contentsOf: pinnedStorageURL),
-           let saved = try? JSONDecoder().decode([ClipboardItem].self, from: data) {
+           let saved = try? decodeHistory([ClipboardItem].self, from: data) {
             pinned = saved.map { var i = $0; i.pinned = true; return i }
         }
         if let data = try? Data(contentsOf: storageURL),
-           let saved = try? JSONDecoder().decode([ClipboardItem].self, from: data) {
+           let saved = try? decodeHistory([ClipboardItem].self, from: data) {
             unpinned = saved.map { var i = $0; i.pinned = false; return i }
         }
         // Keep a single recency-ordered array; `orderedItems` floats pins to the top.
         items = (pinned + unpinned).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// Decrypts `data` (current on-disk format); falls back to plain JSON so
+    /// histories written before encryption existed still load. The next save
+    /// re-persists the file encrypted.
+    private func decodeHistory<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        let plaintext = (try? EncryptedStore.decrypt(data, key: historyKey)) ?? data
+        return try JSONDecoder().decode(type, from: plaintext)
     }
 }
