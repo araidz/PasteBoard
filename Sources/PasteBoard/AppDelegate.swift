@@ -269,6 +269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard clipboardManager.selectedItem != nil else { return }
         panel.dataSource = self
+        panel.delegate = self
         panel.reloadData()
         panel.makeKeyAndOrderFront(nil)
     }
@@ -375,5 +376,19 @@ extension AppDelegate: QLPreviewPanelDataSource {
 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
         previewURLs()[index] as NSURL
+    }
+}
+
+extension AppDelegate: QLPreviewPanelDelegate {
+    /// Quick Look owns its own key window's event loop — our local monitor in
+    /// installKeyMonitor() never sees keys pressed while it's key. This delegate
+    /// hook is QuickLookUI's own escape hatch for exactly that: intercept ⌘Y here
+    /// so a second press closes the panel instead of beeping as an unhandled key.
+    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
+        guard event.type == .keyDown, event.modifierFlags.contains(.command), event.keyCode == 16 else {
+            return false
+        }
+        togglePreview()
+        return true
     }
 }
