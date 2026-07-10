@@ -15,8 +15,8 @@ struct PreviewOverlay: View {
             header
             Divider()
             content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
     }
 
@@ -76,8 +76,8 @@ private struct TextPreview: View {
         ScrollView {
             Text(text)
                 .font(.system(size: 12))
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
         }
     }
@@ -90,8 +90,8 @@ private struct CodePreview: View {
         ScrollView {
             Text(SyntaxHighlighter.highlight(code))
                 .font(.system(size: 12, design: .monospaced))
-                .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(12)
         }
     }
