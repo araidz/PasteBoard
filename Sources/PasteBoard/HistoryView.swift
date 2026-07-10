@@ -2,9 +2,9 @@ import SwiftUI
 import AppKit
 
 // Header (title + count + gear settings menu), search field, and the rich
-// item list with Pinned/Recent section headers and ⌘1–9 quick-paste badges. The search
-// field auto-focuses on open (via .panelDidShow). Highlight is keyboard-only; double-
-// click commits (in the row).
+// item list with Pinned/Recent section headers and ⌘1–9 quick-paste badges. Search
+// is NOT focused by default — press "/" to focus it (space is free for the preview
+// shortcut instead). Highlight is keyboard-only; double-click commits (in the row).
 struct HistoryView: View {
     @ObservedObject var manager: ClipboardManager
     let onCommit: (ClipboardItem) -> Void
@@ -41,7 +41,13 @@ struct HistoryView: View {
         // layout loop under fast alternation. No animation, no pileup.
         .transaction { $0.disablesAnimations = true }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
+            searchFocused = false   // never auto-focus; "/" opts in explicitly
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
             searchFocused = true
+        }
+        .onChange(of: searchFocused) { _, focused in
+            manager.isSearchFocused = focused
         }
     }
 
@@ -93,7 +99,7 @@ struct HistoryView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
                 .font(.caption)
-            TextField("Search...", text: $manager.searchText)
+            TextField("/ to search…", text: $manager.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($searchFocused)

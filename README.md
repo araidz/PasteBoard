@@ -4,11 +4,11 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 
 ## Features
 
-- ⌨️ **⌥⌘V anywhere** — a global hotkey opens your history over any app, search focused
+- ⌨️ **⌥⌘V anywhere** — a global hotkey opens your history over any app
 - ⚡ **Auto-paste** — pick an item and it lands in the app you were typing in (needs Accessibility; falls back to copy-only)
-- 🔢 **⌘1–9 quick paste** — grab the top nine items by number, **⌘Y** previews the full content of the highlighted one
+- 🔢 **⌘1–9 quick paste** — grab the top nine items by number, **space** (or **⌘Y**) previews the full content of the highlighted one
 - 📋 **History** for text, code, images, and files/folders
-- 🔍 **Instant search** across everything you've copied
+- 🔍 **Search** — press **/** to focus it, then type
 - 📌 **Pin** the items you reuse so they stay at the top
 - 🔒 **Encrypted at rest** — history is AES-GCM encrypted with a key held in your login Keychain
 - 🖼️ **Image thumbnails** generated efficiently in the background
@@ -18,8 +18,8 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 ## How it works
 
 1. Copy anything with ⌘C — PasteBoard records it automatically.
-2. Press **⌥⌘V** — your history appears at the pointer, search ready.
-3. Pick with a double-click, **⏎**, or **⌘1–9** — it pastes into the app you were in.
+2. Press **⌥⌘V** — your history appears at the pointer, arrow keys ready.
+3. Pick with a double-click, **⏎**, or **⌘1–9** — it pastes into the app you were in. Press **/** to search first if you need to.
 
 Clicking the menu-bar icon opens the same panel, centered beneath it. Its **gear menu** holds the options: launch at login, paste-directly toggle, Accessibility, history limit, and quit.
 

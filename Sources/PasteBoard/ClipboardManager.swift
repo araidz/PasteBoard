@@ -2,11 +2,12 @@ import Cocoa
 import CryptoKit
 import SwiftUI
 
-// App-internal notifications: a capture happened (menu-bar icon flash, later phase)
-// and the panel became visible (focus the search field).
+// App-internal notifications: a capture happened (menu-bar icon flash), the
+// panel became visible, and the user pressed "/" to focus the search field.
 extension Notification.Name {
     static let clipboardDidCapture = Notification.Name("clipboardDidCapture")
     static let panelDidShow = Notification.Name("panelDidShow")
+    static let focusSearchRequested = Notification.Name("focusSearchRequested")
 }
 
 enum ClipboardItemType: String, Codable {
@@ -104,9 +105,12 @@ class ClipboardManager: ObservableObject {
     }
     // Currently highlighted row, driven by keyboard navigation / clicks.
     @Published var selectedItemID: UUID?
-    // Whether the full-content preview overlay is showing (⌘Y). Tracks
+    // Whether the full-content preview overlay is showing (space / ⌘Y). Tracks
     // selectedItemID live, so arrow keys keep updating it while it's open.
     @Published var isPreviewing: Bool = false
+    // Mirrors the search TextField's @FocusState (set from HistoryView) so the
+    // key monitor knows whether space/"/" should act as shortcuts or as text.
+    @Published var isSearchFocused: Bool = false
 
     private var lastChangeCount: Int = 0
     // Rolling-window size for unpinned items, user-adjustable from the menu and

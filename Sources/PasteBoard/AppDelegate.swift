@@ -245,8 +245,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.commit(item); return nil
                 }
                 return event
-            case 49 where self.clipboardManager.isPreviewing:              // space — closes preview
-                self.clipboardManager.isPreviewing = false
+            case 49 where !self.clipboardManager.isSearchFocused:            // space — toggle preview
+                self.clipboardManager.isPreviewing.toggle()
+                return nil
+            case 44 where !self.clipboardManager.isSearchFocused:            // "/" — focus search
+                NotificationCenter.default.post(name: .focusSearchRequested, object: nil)
                 return nil
             case 53:                                                           // esc
                 if self.clipboardManager.isPreviewing { self.clipboardManager.isPreviewing = false }
