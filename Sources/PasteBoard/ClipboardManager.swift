@@ -187,7 +187,8 @@ class ClipboardManager: ObservableObject {
         if let baseDirectory {
             appDir = baseDirectory
         } else {
-            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
             // App-support dir for history + images. The shared bundle id keeps the
             // Accessibility grant across updates.
             appDir = appSupport.appendingPathComponent("PasteBoard")
@@ -273,13 +274,14 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        // Check for text. Classification (looksLikeCode) scans the string, so
-        // run it off the main thread like the file/image paths.
+        // Check for text. Read the string reference on the main thread (fast —
+        // just a pasteboard pointer), then do classification + size check off-main.
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
-            // Skip oversized text to prevent memory bloat.
-            guard text.utf8.count <= maxItemSizeBytes else { return }
+            let maxSize = maxItemSizeBytes
             ioQueue.async { [weak self] in
                 guard let self else { return }
+                // Skip oversized text to prevent memory bloat.
+                guard text.utf8.count <= maxSize else { return }
                 let item = ClipboardItem(
                     id: UUID(),
                     type: Self.looksLikeCode(text) ? .code : .text,
@@ -558,9 +560,10 @@ class ClipboardManager: ObservableObject {
                 pinned = saved.map { var i = $0; i.pinned = true; return i }
             } else {
                 // Corrupt pinned file — preserve as .corrupt for debugging.
+                // ponytail: UUID suffix avoids race if loadItems runs concurrently
                 NSLog("PasteBoard: pinned history corrupted, preserving backup")
                 let corruptURL = pinnedStorageURL.deletingPathExtension()
-                    .appendingPathExtension("pinned.corrupt")
+                    .appendingPathExtension("pinned.\(UUID().uuidString.prefix(8)).corrupt")
                 try? FileManager.default.removeItem(at: corruptURL)
                 try? FileManager.default.moveItem(at: pinnedStorageURL, to: corruptURL)
             }
@@ -570,9 +573,10 @@ class ClipboardManager: ObservableObject {
                 unpinned = saved.map { var i = $0; i.pinned = false; return i }
             } else {
                 // Corrupt history file — preserve as .corrupt for debugging.
+                // ponytail: UUID suffix avoids race if loadItems runs concurrently
                 NSLog("PasteBoard: history corrupted, preserving backup")
                 let corruptURL = storageURL.deletingPathExtension()
-                    .appendingPathExtension("corrupt")
+                    .appendingPathExtension("history.\(UUID().uuidString.prefix(8)).corrupt")
                 try? FileManager.default.removeItem(at: corruptURL)
                 try? FileManager.default.moveItem(at: storageURL, to: corruptURL)
             }

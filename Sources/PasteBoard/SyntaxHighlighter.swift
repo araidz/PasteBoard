@@ -38,11 +38,15 @@ enum SyntaxHighlighter {
         return try! NSRegularExpression(pattern: pattern)
     }()
 
+    // ponytail: cap input to bound regex backtracking on adversarial clipboard content
+    private static let maxTokenInputLength = 10_000
+
     /// Ordered, non-overlapping classified spans. Pure — the unit-test seam.
     static func tokens(in code: String) -> [(range: NSRange, kind: Kind)] {
-        let ns = code as NSString
+        let truncated = code.count > maxTokenInputLength ? String(code.prefix(maxTokenInputLength)) : code
+        let ns = truncated as NSString
         var out: [(NSRange, Kind)] = []
-        regex.enumerateMatches(in: code, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
+        regex.enumerateMatches(in: truncated, range: NSRange(location: 0, length: ns.length)) { match, _, _ in
             guard let match else { return }
             let kind: Kind
             if match.range(withName: "comment").location != NSNotFound { kind = .comment }

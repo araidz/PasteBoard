@@ -38,12 +38,18 @@ enum EncryptedStore {
     private static let account = "history"
 
     /// The persistent history key: loads it from Keychain, or generates and
-    /// stores a new one on first run.
+    /// stores a new one on first run. Only creates a new key when the keychain
+    /// genuinely has no entry (errSecItemNotFound) — transient read failures
+    /// propagate instead of silently overwriting the existing key.
     static func persistentKey() throws -> SymmetricKey {
-        if let data = try? readKeychain() { return SymmetricKey(data: data) }
-        let key = SymmetricKey(size: .bits256)
-        try writeKeychain(key.withUnsafeBytes { Data($0) })
-        return key
+        do {
+            let data = try readKeychain()
+            return SymmetricKey(data: data)
+        } catch let EncryptedStoreError.keychainReadFailed(status) where status == errSecItemNotFound {
+            let key = SymmetricKey(size: .bits256)
+            try writeKeychain(key.withUnsafeBytes { Data($0) })
+            return key
+        }
     }
 
     private static func query() -> [String: Any] {

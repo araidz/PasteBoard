@@ -36,7 +36,11 @@ final class HotKey {
     deinit {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let eventHandler { RemoveEventHandler(eventHandler) }
-        // Balance the passRetained in init.
+        // Balance the passRetained in init. If this HotKey was never properly
+        // retained (e.g. moved out of its owner), the release is harmless —
+        // the assertion catches orphaned refs during development.
+        let ptr = Unmanaged.passUnretained(self).toOpaque()
+        assert(ptr != nil, "HotKey.deinit: passUnretained(self) returned nil — retain balance broken")
         Unmanaged<HotKey>.passUnretained(self).release()
     }
 }

@@ -16,7 +16,12 @@ enum AutoPaste {
 
     /// Bring `app` forward, then paste the current clipboard into it.
     static func paste(into app: NSRunningApplication?) {
-        app?.activate()
+        guard let app else { return }
+        if #available(macOS 14.0, *) {
+            app.activate(from: NSRunningApplication.current, options: [])
+        } else {
+            app.activate()
+        }
         // Small grace period for the target to become frontmost before ⌘V.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
             postCommandV()

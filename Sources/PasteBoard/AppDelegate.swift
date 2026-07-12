@@ -326,7 +326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// ponytail: internal for testing — no production callers outside AppDelegate.
     static func shellEscape(_ path: String) -> String {
         if path.isEmpty { return "" }
-        let shellSpecial = Set("\\'\"`$!#*?|[](){}<>~; \t\n")
+        let shellSpecial = Set("\\'\"`$!#*?|[](){}<>~;& \t\n")
         var out = ""
         for ch in path {
             if shellSpecial.contains(ch) { out.append("\\") }
