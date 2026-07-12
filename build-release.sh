@@ -2,19 +2,35 @@
 #
 # Build a distributable PasteBoard.app + PasteBoard.dmg in one shot.
 #
-#   ./build-release.sh [version] [build]
+#   ./build-release.sh [--test] [version] [build]
 #
-# Defaults to 1.1 (build 2). The result is a release build, stripped of debug
+# --test    Build a test version with a green icon and separate bundle ID
+#           so it can coexist with the stable build.
+# Defaults to 2.0 (build 6). The result is a release build, stripped of debug
 # symbols, ad-hoc signed (this is a free app with no paid Apple cert), and packaged
 # into a compressed read-only DMG named after the app. Output lands in dist/, which
 # is gitignored — the .app and .dmg are distributed via GitHub Releases, not committed.
 set -euo pipefail
 cd "$(dirname "$0")"
 
+TEST_MODE=false
+if [[ "${1:-}" == "--test" ]]; then
+  TEST_MODE=true
+  shift
+fi
+
 APP_NAME="PasteBoard"
 BUNDLE_ID="com.local.pasteboard"
 VERSION="${1:-2.0}"
 BUILD="${2:-6}"
+
+if $TEST_MODE; then
+  APP_NAME="PasteBoard-Test"
+  BUNDLE_ID="com.local.pasteboard.test"
+  ICON_SRC="Resources/AppIcon-Test.icns"
+else
+  ICON_SRC="Resources/AppIcon.icns"
+fi
 
 DIST="dist"
 APP="$DIST/$APP_NAME.app"
@@ -30,13 +46,13 @@ fi
 
 echo "▸ Building release binary…"
 xcrun swift build -c release
-BIN="$(xcrun swift build -c release --show-bin-path)/$APP_NAME"
+BIN="$(xcrun swift build -c release --show-bin-path)/PasteBoard"
 
 echo "▸ Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
-cp "Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+cp "$BIN" "$APP/Contents/MacOS/PasteBoard"
+cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -47,7 +63,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDisplayName</key>
 	<string>$APP_NAME</string>
 	<key>CFBundleExecutable</key>
-	<string>$APP_NAME</string>
+	<string>PasteBoard</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
@@ -73,7 +89,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 PLIST
 
 echo "▸ Stripping debug symbols…"
-strip -rSTx "$APP/Contents/MacOS/$APP_NAME"
+strip -rSTx "$APP/Contents/MacOS/PasteBoard"
 
 # Prefer a stable self-signed identity (see make-signing-cert.sh) so the
 # Accessibility permission survives rebuilds; fall back to ad-hoc otherwise.
@@ -90,11 +106,11 @@ codesign --verify --deep --strict "$APP"
 
 echo "▸ Building ${DMG}…"
 STAGE="$(mktemp -d)"
-cp -R "$APP" "$STAGE/$APP_NAME.app"
+cp -R "$APP" "$STAGE/PasteBoard.app"
 rm -f "$DMG"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
-echo "✓ Done — v$VERSION (build $BUILD)"
-echo "  app: $APP  ($(du -h "$APP/Contents/MacOS/$APP_NAME" | cut -f1) binary)"
+echo "✓ Done — v$VERSION (build $BUILD) $([ "$TEST_MODE" = true ] && echo '[TEST]')"
+echo "  app: $APP  ($(du -h "$APP/Contents/MacOS/PasteBoard" | cut -f1) binary)"
 echo "  dmg: $DMG  ($(du -h "$DMG" | cut -f1))"
