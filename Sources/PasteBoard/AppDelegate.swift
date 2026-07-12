@@ -310,7 +310,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = capturedApp
         let isSelf = target?.processIdentifier == NSRunningApplication.current.processIdentifier
         if autoPasteEnabled, AutoPaste.isTrusted, let target, !isSelf {
-            AutoPaste.paste(into: target)
+            // Panel is non-activating, so the target is usually still frontmost.
+            // Skip the activate() overhead and paste directly — 0.04s vs 0.24s.
+            if target.isActive {
+                AutoPaste.instantPaste()
+            } else {
+                AutoPaste.paste(into: target)
+            }
         }
     }
 

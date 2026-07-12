@@ -23,12 +23,20 @@ enum AutoPaste {
             app.activate()
         }
         // Small grace period for the target to become frontmost before ⌘V.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
             postCommandV()
         }
     }
 
-    private static func postCommandV() {
+    /// Paste immediately when the target is already frontmost (panel is
+    /// non-activating, so the target retains focus in the common case).
+    static func instantPaste() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            postCommandV()
+        }
+    }
+
+    static func postCommandV() {
         let src = CGEventSource(stateID: .combinedSessionState)
         let cmd = CGKeyCode(kVK_Command)
         let v = CGKeyCode(kVK_ANSI_V)
