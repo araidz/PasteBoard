@@ -123,6 +123,14 @@ class ClipboardManager: ObservableObject {
             saveItems()
         }
     }
+    // Maximum size in bytes for a single clipboard item. Items exceeding this
+    // are silently skipped to prevent memory/disk bloat from huge images.
+    @Published var maxItemSizeBytes: Int = (UserDefaults.standard.object(forKey: "maxItemSizeBytes") as? Int) ?? 10_000_000 {
+        didSet {
+            guard maxItemSizeBytes != oldValue else { return }
+            UserDefaults.standard.set(maxItemSizeBytes, forKey: "maxItemSizeBytes")
+        }
+    }
     private let storageURL: URL          // unpinned history
     private let pinnedStorageURL: URL    // pinned items, persisted separately
     private let imageStorageURL: URL
@@ -130,6 +138,7 @@ class ClipboardManager: ObservableObject {
     // All disk writes/deletions run here so pin/delete update the UI instantly.
     private let ioQueue = DispatchQueue(label: "com.local.pasteboard.io", qos: .utility)
     // Coalesces rapid mutations (e.g. repeated pin toggles) into a single write.
+    // Managed exclusively on ioQueue to avoid cross-thread races.
     private var pendingSave: DispatchWorkItem?
     private static let saveDebounce: TimeInterval = 0.4
 
@@ -150,7 +159,7 @@ class ClipboardManager: ObservableObject {
     // Pinned items always float to the top, newest-first within each group.
     var orderedItems: [ClipboardItem] {
         if let cachedOrdered { return cachedOrdered }
-        let pinned = items.filter { $0.pinned }
+        let pinned = items.filter { $0.pinned }.sorted { $0.timestamp > $1.timestamp }
         let rest = items.filter { !$0.pinned }
         let result = pinned + rest
         cachedOrdered = result
@@ -240,6 +249,8 @@ class ClipboardManager: ObservableObject {
                 guard let tiffData = image.tiffRepresentation,
                       let bitmap = NSBitmapImageRep(data: tiffData),
                       let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+                // Skip oversized images to prevent memory/disk bloat.
+                guard pngData.count <= self.maxItemSizeBytes else { return }
                 do {
                     try pngData.write(to: imagePath)
                 } catch {
@@ -262,6 +273,8 @@ class ClipboardManager: ObservableObject {
 
         // Check for text
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
+            // Skip oversized text to prevent memory bloat.
+            guard text.utf8.count <= maxItemSizeBytes else { return }
             let item = ClipboardItem(
                 id: UUID(),
                 type: Self.classifyText(text),
@@ -357,6 +370,11 @@ class ClipboardManager: ObservableObject {
             return a.textContent != nil && a.textContent == b.textContent
         case (.file, .file), (.folder, .folder), (.file, .folder), (.folder, .file):
             return a.filePaths != nil && a.filePaths == b.filePaths
+        case (.image, .image):
+            // Dedup by file path — same path means same captured image.
+            if let pa = a.imagePath, let pb = b.imagePath { return pa == pb }
+            // Fallback: if either has no path (shouldn't happen), skip dedup.
+            return false
         default:
             return false
         }
@@ -488,7 +506,7 @@ class ClipboardManager: ObservableObject {
         let storageURL = self.storageURL
         let pinnedStorageURL = self.pinnedStorageURL
         let historyKey = self.historyKey
-        pendingSave?.cancel()
+        // Manage pendingSave entirely on ioQueue to avoid cross-thread races.
         let work = DispatchWorkItem {
             do {
                 let unpinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
@@ -499,20 +517,40 @@ class ClipboardManager: ObservableObject {
                 NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
             }
         }
-        pendingSave = work
-        ioQueue.asyncAfter(deadline: .now() + Self.saveDebounce, execute: work)
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            self.pendingSave?.cancel()
+            self.pendingSave = work
+            self.ioQueue.asyncAfter(deadline: .now() + Self.saveDebounce, execute: work)
+        }
     }
 
     private func loadItems() {
         var pinned: [ClipboardItem] = []
         var unpinned: [ClipboardItem] = []
-        if let data = try? Data(contentsOf: pinnedStorageURL),
-           let saved = try? decodeHistory([ClipboardItem].self, from: data) {
-            pinned = saved.map { var i = $0; i.pinned = true; return i }
+        if let data = try? Data(contentsOf: pinnedStorageURL) {
+            if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
+                pinned = saved.map { var i = $0; i.pinned = true; return i }
+            } else {
+                // Corrupt pinned file — preserve as .corrupt for debugging.
+                NSLog("PasteBoard: pinned history corrupted, preserving backup")
+                let corruptURL = pinnedStorageURL.deletingPathExtension()
+                    .appendingPathExtension("pinned.corrupt")
+                try? FileManager.default.removeItem(at: corruptURL)
+                try? FileManager.default.moveItem(at: pinnedStorageURL, to: corruptURL)
+            }
         }
-        if let data = try? Data(contentsOf: storageURL),
-           let saved = try? decodeHistory([ClipboardItem].self, from: data) {
-            unpinned = saved.map { var i = $0; i.pinned = false; return i }
+        if let data = try? Data(contentsOf: storageURL) {
+            if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
+                unpinned = saved.map { var i = $0; i.pinned = false; return i }
+            } else {
+                // Corrupt history file — preserve as .corrupt for debugging.
+                NSLog("PasteBoard: history corrupted, preserving backup")
+                let corruptURL = storageURL.deletingPathExtension()
+                    .appendingPathExtension("corrupt")
+                try? FileManager.default.removeItem(at: corruptURL)
+                try? FileManager.default.moveItem(at: storageURL, to: corruptURL)
+            }
         }
         // Keep a single recency-ordered array; `orderedItems` floats pins to the top.
         items = (pinned + unpinned).sorted { $0.timestamp > $1.timestamp }

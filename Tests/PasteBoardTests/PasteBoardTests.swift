@@ -25,7 +25,7 @@ final class PasteBoardTests: XCTestCase {
             sourceApp: nil, pinned: pinned)
     }
 
-    // 1. Pinned float above unpinned; order within each group is preserved.
+    // 1. Pinned float above unpinned; within pinned, newest first.
     func testFilteredItemsOrdering() {
         let m = makeManager()
         let a = textItem("a")
@@ -33,8 +33,8 @@ final class PasteBoardTests: XCTestCase {
         let c = textItem("c")
         let d = textItem("d", pinned: true)
         m.items = [a, b, c, d]
-        // pinned [b, d] first (items order), then unpinned [a, c] (items order).
-        XCTAssertEqual(m.filteredItems.map(\.textContent), ["b", "d", "a", "c"])
+        // pinned sorted by recency: [d, b] (d has higher tick), then unpinned [a, c].
+        XCTAssertEqual(m.filteredItems.map(\.textContent), ["d", "b", "a", "c"])
     }
 
     // 2. Case-insensitive substring on displayText; empty -> all; no match -> empty.
@@ -266,5 +266,75 @@ final class PasteBoardTests: XCTestCase {
         // Path with shell-special characters.
         XCTAssertEqual(AppDelegate.shellEscape("/tmp/$HOME `whoami` !*"),
                        "/tmp/\\$HOME\\ \\`whoami\\`\\ \\!\\*")
+    }
+
+    // MARK: - Phase 2: Core Manager
+
+    // 14. Pinned items sorted by recency (newest first), not insertion order.
+    func testPinnedItemsSortedByRecency() {
+        let m = makeManager()
+        let old = textItem("old-pinned", pinned: true)  // tick=1
+        let newer = textItem("newer-pinned", pinned: true) // tick=2
+        let newest = textItem("newest-pinned", pinned: true) // tick=3
+        let unpinned = textItem("unpinned")
+        // Insert in non-chronological order.
+        m.items = [old, unpinned, newest, newer]
+        XCTAssertEqual(m.orderedItems.map(\.textContent),
+                       ["newest-pinned", "newer-pinned", "old-pinned", "unpinned"])
+    }
+
+    // 15. Corrupt history file is preserved as .corrupt, app starts clean.
+    func testCorruptHistoryPreservedAsBackup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Write garbage to history.json.
+        try "NOT_VALID_JSON_OR_ENCRYPTED".data(using: .utf8)!.write(to: dir.appendingPathComponent("history.json"))
+
+        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { SymmetricKey(size: .bits256) })
+        // History should be empty (no crash).
+        XCTAssertTrue(manager.items.isEmpty)
+        // Original file moved to .corrupt.
+        let corruptURL = dir.appendingPathComponent("history.corrupt")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: corruptURL.path),
+                      "corrupt file should be preserved at \(corruptURL)")
+    }
+
+    // 16. Image items dedup by file path.
+    func testImageDeduplication() {
+        let m = makeManager()
+        let imgPath = "/tmp/test-image-\(UUID().uuidString).png"
+        let a = ClipboardItem(id: UUID(), type: .image, textContent: nil,
+                              imagePath: imgPath, filePaths: nil,
+                              timestamp: Date(), sourceApp: nil)
+        let b = ClipboardItem(id: UUID(), type: .image, textContent: nil,
+                              imagePath: imgPath, filePaths: nil,
+                              timestamp: Date(), sourceApp: nil)
+        m.items = [a]
+        m.insert(b)
+        // b should replace a (same path = same image).
+        XCTAssertEqual(m.items.count, 1)
+        XCTAssertEqual(m.items.first?.id, b.id)
+    }
+
+    // 17. maxItemSizeBytes defaults to 10MB.
+    func testMaxItemSizeBytesDefault() {
+        let m = makeManager()
+        XCTAssertEqual(m.maxItemSizeBytes, 10_000_000)
+    }
+
+    // 18. Rapid insertions don't lose data.
+    func testRapidInsertionsDontLoseData() {
+        let m = makeManager()
+        m.maxItems = 50
+        for i in 0..<20 {
+            let item = ClipboardItem(
+                id: UUID(), type: .text, textContent: "rapid-\(UUID().uuidString)",
+                imagePath: nil, filePaths: nil,
+                timestamp: Date(timeIntervalSince1970: Double(i)),
+                sourceApp: nil
+            )
+            m.insert(item)
+        }
+        XCTAssertEqual(m.items.count, 20, "all 20 rapid insertions preserved in memory")
     }
 }
