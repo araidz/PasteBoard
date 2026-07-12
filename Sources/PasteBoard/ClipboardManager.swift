@@ -272,29 +272,28 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        // Check for text
+        // Check for text. Classification (looksLikeCode) scans the string, so
+        // run it off the main thread like the file/image paths.
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
             // Skip oversized text to prevent memory bloat.
             guard text.utf8.count <= maxItemSizeBytes else { return }
-            let item = ClipboardItem(
-                id: UUID(),
-                type: Self.classifyText(text),
-                textContent: text,
-                imagePath: nil,
-                filePaths: nil,
-                timestamp: Date(),
-                sourceApp: sourceApp
-            )
-            addItem(item)
+            ioQueue.async { [weak self] in
+                guard let self else { return }
+                let item = ClipboardItem(
+                    id: UUID(),
+                    type: Self.looksLikeCode(text) ? .code : .text,
+                    textContent: text,
+                    imagePath: nil,
+                    filePaths: nil,
+                    timestamp: Date(),
+                    sourceApp: sourceApp
+                )
+                self.addItem(item)
+            }
         }
     }
 
     // MARK: - Classification (pure, internal so tests can exercise them)
-
-    /// Classify pasted text as a code snippet or plain text.
-    static func classifyText(_ text: String) -> ClipboardItemType {
-        looksLikeCode(text) ? .code : .text
-    }
 
     /// Classify copied file URLs: a copy made entirely of directories is a folder.
     static func fileType(forPaths paths: [String]) -> ClipboardItemType {
@@ -307,6 +306,7 @@ class ClipboardManager: ObservableObject {
     }
 
     /// Heuristic: does this text read like a code snippet rather than prose?
+    private static let codeChars = Set("{}();[]<>=+*/&|")
     static func looksLikeCode(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 12 else { return false }
@@ -322,19 +322,16 @@ class ClipboardManager: ObservableObject {
         for kw in keywords where trimmed.contains(kw) { score += 1 }
 
         // Density of punctuation that is common in code but rare in prose.
-        let codeChars = Set("{}();[]<>=+*/&|")
         let codeCharCount = trimmed.filter { codeChars.contains($0) }.count
         if Double(codeCharCount) / Double(trimmed.count) > 0.06 { score += 1 }
 
         if trimmed.contains("{") && trimmed.contains("}") { score += 1 }
         if trimmed.contains(";") { score += 1 }
 
-        // Indented continuation lines strongly suggest source code.
-        let lines = trimmed.components(separatedBy: "\n")
-        if lines.count > 1,
-           lines.contains(where: { $0.hasPrefix("    ") || $0.hasPrefix("\t") }) {
-            score += 1
-        }
+        // ponytail: zero-alloc scan — avoids components(separatedBy:) allocation
+        let hasNewline = trimmed.contains("\n")
+        let hasIndentedLine = hasNewline && (trimmed.contains("\n    ") || trimmed.contains("\n\t"))
+        if hasIndentedLine { score += 1 }
 
         return score >= 2
     }
@@ -379,6 +376,13 @@ class ClipboardManager: ObservableObject {
         default:
             return false
         }
+    }
+
+    // ponytail: shared partition avoids repeating the same filter over the full array
+    private func partitioned() -> (pinned: [ClipboardItem], unpinned: [ClipboardItem]) {
+        let p = items.filter { $0.pinned }
+        let u = items.filter { !$0.pinned }
+        return (p, u)
     }
 
     /// Enforce the 200-item window over unpinned items, leaving pinned ones untouched.
@@ -455,13 +459,14 @@ class ClipboardManager: ObservableObject {
             }
         }
         items.removeAll { $0.id == item.id }   // instant UI update
-        removeFiles([item.imagePath].compactMap { $0 })
+        if let p = item.imagePath { removeFiles([p]) }
         saveItems()
     }
 
     func clearAll() {
         // Preserve pinned items; only clear the rolling history.
-        let imagePaths = items.filter { !$0.pinned }.compactMap { $0.imagePath }
+        let unpinned = items.filter { !$0.pinned }
+        let imagePaths = unpinned.compactMap { $0.imagePath }
         items.removeAll { !$0.pinned }         // instant UI update
         removeFiles(imagePaths)
         saveItems()
@@ -474,10 +479,6 @@ class ClipboardManager: ObservableObject {
         return items.first { $0.id == id }
     }
 
-    func selectFirst() {
-        selectedItemID = filteredItems.first?.id
-    }
-
     /// Move the highlighted row through the currently displayed list.
     func moveSelection(by delta: Int) {
         let list = filteredItems
@@ -487,6 +488,7 @@ class ClipboardManager: ObservableObject {
         }
         if let currentIndex = list.firstIndex(where: { $0.id == selectedItemID }) {
             // Wrap around: past the last row jumps to the first, and vice-versa.
+            // ponytail: double-mod handles negative delta wrapping
             let count = list.count
             let newIndex = ((currentIndex + delta) % count + count) % count
             selectedItemID = list[newIndex].id
@@ -523,8 +525,7 @@ class ClipboardManager: ObservableObject {
         // Snapshot on the main thread, then encode + write off the main thread.
         // A burst of mutations (rapid pin toggles, a flurry of captures) collapses
         // into a single write via the debounced work item.
-        let pinned = items.filter { $0.pinned }
-        let unpinned = items.filter { !$0.pinned }
+        let (pinned, unpinned) = partitioned()
         let storageURL = self.storageURL
         let pinnedStorageURL = self.pinnedStorageURL
         let historyKey = self.historyKey

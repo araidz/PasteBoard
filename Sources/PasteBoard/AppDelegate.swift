@@ -94,14 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // Place the panel just below the mouse cursor, clamped to the active screen.
+    // ponytail: manual positioning because NSWindow.center() doesn't account for the menu bar or cursor offset.
     private func positionNearCursor(_ w: NSWindow) {
         let mouse = NSEvent.mouseLocation
         guard let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main else { return }
-        let vf = screen.visibleFrame
-        let size = w.frame.size
-        var origin = NSPoint(x: mouse.x, y: mouse.y - size.height)
-        origin.x = min(max(vf.minX, origin.x), vf.maxX - size.width)
-        origin.y = min(max(vf.minY, origin.y), vf.maxY - size.height)
+        let origin = clampOrigin(
+            NSPoint(x: mouse.x, y: mouse.y - w.frame.size.height),
+            to: screen.visibleFrame, size: w.frame.size
+        )
         w.setFrameOrigin(origin)
     }
 
@@ -116,11 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let iconWindow = statusItem.button?.window else { positionNearCursor(w); return }
         let iconFrame = iconWindow.frame
         let vf = (iconWindow.screen ?? NSScreen.main)?.visibleFrame ?? iconFrame
-        let size = w.frame.size
-        var origin = NSPoint(x: iconFrame.midX - size.width / 2, y: iconFrame.minY - size.height)
-        origin.x = min(max(vf.minX, origin.x), vf.maxX - size.width)
-        origin.y = min(max(vf.minY, origin.y), vf.maxY - size.height)
+        let origin = clampOrigin(
+            NSPoint(x: iconFrame.midX - w.frame.size.width / 2, y: iconFrame.minY - w.frame.size.height),
+            to: vf, size: w.frame.size
+        )
         w.setFrameOrigin(origin)
+    }
+
+    // ponytail: shared clamp — both positioning paths need the same 4-line min/max.
+    private func clampOrigin(_ origin: NSPoint, to vf: NSRect, size: NSSize) -> NSPoint {
+        var o = origin
+        o.x = min(max(vf.minX, o.x), vf.maxX - size.width)
+        o.y = min(max(vf.minY, o.y), vf.maxY - size.height)
+        return o
     }
 
     @objc private func toggleWindow() {

@@ -16,6 +16,7 @@ final class HotKey {
             eventKind: OSType(kEventHotKeyPressed)
         )
         // Use passRetained so the HotKey stays alive while the handler is installed.
+        // ponytail: passRetained keeps HotKey alive for the Carbon callback lifetime — leaks if deinit never runs (e.g. orphaned ref).
         let selfPtr = Unmanaged.passRetained(self).toOpaque()
         InstallEventHandler(
             GetApplicationEventTarget(),

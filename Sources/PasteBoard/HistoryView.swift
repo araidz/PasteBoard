@@ -39,6 +39,7 @@ struct HistoryView: View {
         // empty-vs-populated branch) back to back; SwiftUI's default implicit
         // transition tried to animate each swap and piled up into a runaway
         // layout loop under fast alternation. No animation, no pileup.
+        // ponytail: global animation disable — narrow to per-transition if SwiftUI fixes the layout loop
         .transaction { $0.disablesAnimations = true }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = false   // never auto-focus; "/" opts in explicitly

@@ -3,6 +3,20 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
+// ponytail: shared downsample — avoids duplicating the CGImageSource boilerplate
+func downsampleImage(path: String, maxPixelSize: Int) -> NSImage? {
+    let url = URL(fileURLWithPath: path)
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    let options: [CFString: Any] = [
+        kCGImageSourceCreateThumbnailFromImageAlways: true,
+        kCGImageSourceCreateThumbnailWithTransform: true,
+        kCGImageSourceShouldCacheImmediately: true,
+        kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+    ]
+    guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+    return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+}
+
 /// Caches downsampled thumbnails so image rows don't re-read/decode the PNG from
 /// disk on every render. Thumbnails are generated off the main thread and stored
 /// at display scale (not full resolution) so a long history of large images can't
@@ -42,16 +56,7 @@ enum ThumbnailCache {
     }
 
     private static func downsample(path: String) -> NSImage? {
-        let url = URL(fileURLWithPath: path)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
-        ]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        downsampleImage(path: path, maxPixelSize: maxPixelSize)
     }
 }
 
@@ -111,6 +116,7 @@ func fileIconName(forPath path: String?) -> String {
 }
 
 /// Uncached resolution of an extension to an SF Symbol name.
+// ponytail: explicit switch avoids UTType lookup per row — remove if UTType perf improves
 private func resolveFileIconName(forExtension ext: String) -> String {
     switch ext {
     // Archives / packages
@@ -304,11 +310,9 @@ struct ClipboardItemRow: View {
     // Multi-file groups can be expanded to reveal their members.
     @State private var expanded = false
     // Only keyboard/click selection highlights a row — never hover.
-    private var isHighlighted: Bool { isSelected }
-
     // On an accent-highlighted row, text/icons flip to white like a native menu item.
-    private var contentColor: Color { isHighlighted ? .white : .primary }
-    private var secondaryColor: Color { isHighlighted ? Color.white.opacity(0.85) : .secondary }
+    private var contentColor: Color { isSelected ? .white : .primary }
+    private var secondaryColor: Color { isSelected ? Color.white.opacity(0.85) : .secondary }
 
     // Uniform size for the leading icon tile / thumbnail.
     static let iconSize: CGFloat = 24
@@ -328,7 +332,7 @@ struct ClipboardItemRow: View {
             // Flat, system-style glyph — no coloured tile behind it.
             Image(systemName: iconName)
                 .font(.system(size: 15))
-                .foregroundColor(isHighlighted ? .white : .secondary)
+                .foregroundColor(isSelected ? .white : .secondary)
                 .frame(width: Self.iconSize, height: Self.iconSize)
         }
     }
@@ -347,6 +351,12 @@ struct ClipboardItemRow: View {
         return raw.count > 300 ? String(raw.prefix(300)) + "…" : raw
     }
 
+    // ponytail: static to avoid re-allocating the set on every SwiftUI render pass
+    private static let imageExts: Set<String> = [
+        "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "bmp", "webp",
+        "avif", "jxl", "raw", "cr2", "cr3", "nef", "dng", "arw", "orf", "rw2"
+    ]
+
     /// Path to an image we can preview as a thumbnail: the stored PNG for copied
     /// images, or the file itself when a single image file/screenshot was copied.
     private var thumbnailPath: String? {
@@ -357,11 +367,7 @@ struct ClipboardItemRow: View {
             // Only a lone image file previews — multi-file copies keep their list.
             guard let paths = item.filePaths, paths.count == 1, let path = paths.first else { return nil }
             let ext = (path as NSString).pathExtension.lowercased()
-            let imageExts: Set<String> = [
-                "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "bmp", "webp",
-                "avif", "jxl", "raw", "cr2", "cr3", "nef", "dng", "arw", "orf", "rw2"
-            ]
-            return imageExts.contains(ext) ? path : nil
+            return Self.imageExts.contains(ext) ? path : nil
         case .text, .code:
             return nil
         }
@@ -421,7 +427,7 @@ struct ClipboardItemRow: View {
 
             Image(systemName: item.type == .folder ? "folder" : "doc.on.doc")
                 .font(.system(size: 15))
-                .foregroundColor(isHighlighted ? .white : .secondary)
+                .foregroundColor(isSelected ? .white : .secondary)
                 .frame(width: Self.iconSize, height: Self.iconSize)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -429,7 +435,7 @@ struct ClipboardItemRow: View {
                     if item.pinned {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 9))
-                            .foregroundColor(isHighlighted ? .white : .orange)
+                            .foregroundColor(isSelected ? .white : .orange)
                     }
                     Text("\(item.filePaths?.count ?? 0) items")
                         .font(.system(size: 12))
@@ -472,7 +478,7 @@ struct ClipboardItemRow: View {
 
     private var highlightBackground: some View {
         RoundedRectangle(cornerRadius: 6)
-            .fill(isHighlighted ? Color.accentColor : Color.clear)
+            .fill(isSelected ? Color.accentColor : Color.clear)
             .padding(.horizontal, 6)
     }
 
@@ -483,7 +489,7 @@ struct ClipboardItemRow: View {
                 if item.pinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 9))
-                        .foregroundColor(isHighlighted ? .white : .orange)
+                        .foregroundColor(isSelected ? .white : .orange)
                 }
                 if let app = item.sourceApp {
                     Text(app)
@@ -589,7 +595,7 @@ struct ClipboardItemRow: View {
     @ViewBuilder
     private var codeText: some View {
         Group {
-            if isHighlighted {
+            if isSelected {
                 Text(codePreview).foregroundColor(.white)
             } else {
                 Text(SyntaxHighlighter.highlight(codePreview))

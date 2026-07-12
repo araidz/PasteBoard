@@ -69,26 +69,9 @@ private struct ImagePreview: View {
         .task(id: path) {
             guard let path else { return }
             image = await Task.detached(priority: .userInitiated) {
-                Self.downsample(path: path)
+                downsampleImage(path: path, maxPixelSize: Self.maxPreviewPixels)
             }.value
         }
-    }
-
-    private static func downsample(path: String) -> NSImage? {
-        let url = URL(fileURLWithPath: path)
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            return NSImage(contentsOfFile: path)
-        }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceShouldCacheImmediately: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPreviewPixels
-        ]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
-            return NSImage(contentsOfFile: path)
-        }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
     }
 }
 
