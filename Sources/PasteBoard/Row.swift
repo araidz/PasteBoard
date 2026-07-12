@@ -87,17 +87,27 @@ private struct ThumbnailView: View {
 
 // Memoizes the icon for an extension — the lookup (especially the UTType
 // fallback) is pure in `ext`, and extensions repeat heavily across a history.
-// Touched only from the main thread during view rendering.
-private var fileIconCache: [String: String] = [:]
+// Scoped inside ThumbnailCache for bounded size via NSCache.
+extension ThumbnailCache {
+    private static let fileIconCache: NSCache<NSString, NSString> = {
+        let c = NSCache<NSString, NSString>()
+        c.countLimit = 200
+        return c
+    }()
+
+    static func cachedFileIconName(forPath path: String?) -> String {
+        let ext = (path.map { ($0 as NSString).pathExtension.lowercased() }) ?? ""
+        if let cached = fileIconCache.object(forKey: ext as NSString) { return cached as String }
+        let name = resolveFileIconName(forExtension: ext)
+        fileIconCache.setObject(name as NSString, forKey: ext as NSString)
+        return name
+    }
+}
 
 /// SF Symbol for a file, chosen by its extension. Shared by single rows and
 /// the members of an expanded multi-file group. Generously categorized.
 func fileIconName(forPath path: String?) -> String {
-    let ext = (path.map { ($0 as NSString).pathExtension.lowercased() }) ?? ""
-    if let cached = fileIconCache[ext] { return cached }
-    let name = resolveFileIconName(forExtension: ext)
-    fileIconCache[ext] = name
-    return name
+    ThumbnailCache.cachedFileIconName(forPath: path)
 }
 
 /// Uncached resolution of an extension to an SF Symbol name.
@@ -347,7 +357,10 @@ struct ClipboardItemRow: View {
             // Only a lone image file previews — multi-file copies keep their list.
             guard let paths = item.filePaths, paths.count == 1, let path = paths.first else { return nil }
             let ext = (path as NSString).pathExtension.lowercased()
-            let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "bmp", "webp"]
+            let imageExts: Set<String> = [
+                "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "bmp", "webp",
+                "avif", "jxl", "raw", "cr2", "cr3", "nef", "dng", "arw", "orf", "rw2"
+            ]
             return imageExts.contains(ext) ? path : nil
         case .text, .code:
             return nil

@@ -63,13 +63,23 @@ enum SyntaxHighlighter {
         }
     }
 
-    // Small memo — previews re-render often and the same snippet recurs.
-    private static var cache: [String: AttributedString] = [:]
+    // Ponytail: AttributedString is a value type, so wrap for NSCache.
+    private final class CachedAttributedString {
+        let value: AttributedString
+        init(_ value: AttributedString) { self.value = value }
+    }
+
+    // Thread-safe LRU cache — NSCache handles eviction automatically.
+    private static let cache: NSCache<NSString, CachedAttributedString> = {
+        let c = NSCache<NSString, CachedAttributedString>()
+        c.countLimit = 400
+        return c
+    }()
 
     /// Syntax-coloured `AttributedString` for a code snippet. Uncoloured spans
     /// keep `.primary`.
     static func highlight(_ code: String) -> AttributedString {
-        if let cached = cache[code] { return cached }
+        if let cached = cache.object(forKey: code as NSString) { return cached.value }
         let ns = code as NSString
         var result = AttributedString()
         var cursor = 0
@@ -89,8 +99,7 @@ enum SyntaxHighlighter {
             tail.foregroundColor = .primary
             result += tail
         }
-        if cache.count > 400 { cache.removeAll() }   // ponytail: crude cap, fine for a preview cache
-        cache[code] = result
+        cache.setObject(CachedAttributedString(result), forKey: code as NSString)
         return result
     }
 }

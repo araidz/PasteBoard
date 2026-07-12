@@ -337,4 +337,61 @@ final class PasteBoardTests: XCTestCase {
         }
         XCTAssertEqual(m.items.count, 20, "all 20 rapid insertions preserved in memory")
     }
+
+    // MARK: - Phase 3: Performance
+
+    // 19. SyntaxHighlighter cache works correctly — same input returns same output.
+    func testSyntaxHighlighterCache() {
+        let code = "func hello() { return 42 }"
+        let first = SyntaxHighlighter.highlight(code)
+        let second = SyntaxHighlighter.highlight(code)
+        XCTAssertEqual(first, second, "cached result should equal fresh result")
+    }
+
+    // 20. Orphaned image files are cleaned up on launch.
+    func testOrphanedImageCleanup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let imageDir = dir.appendingPathComponent("Images")
+        try FileManager.default.createDirectory(at: imageDir, withIntermediateDirectories: true)
+
+        // Create an orphaned image file.
+        let orphan = imageDir.appendingPathComponent("orphan.png")
+        try "not-an-image".data(using: .utf8)!.write(to: orphan)
+
+        // Create a referenced image file.
+        let referenced = imageDir.appendingPathComponent("referenced.png")
+        try "also-not-an-image".data(using: .utf8)!.write(to: referenced)
+
+        // Pre-write a history file that references only "referenced" so that
+        // loadItems picks it up before cleanupOrphanedImages runs.
+        let key = SymmetricKey(size: .bits256)
+        let item = ClipboardItem(
+            id: UUID(), type: .image, textContent: nil,
+            imagePath: referenced.standardizedFileURL.path, filePaths: nil,
+            timestamp: Date(), sourceApp: nil
+        )
+        let data = try EncryptedStore.encrypt(JSONEncoder().encode([item]), key: key)
+        try data.write(to: dir.appendingPathComponent("history.json"))
+
+        // Creating the manager triggers loadItems + cleanupOrphanedImages.
+        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+
+        // Wait for async cleanup on ioQueue.
+        let cleaned = expectation(description: "orphan cleanup")
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { cleaned.fulfill() }
+        wait(for: [cleaned], timeout: 3)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path),
+                       "orphaned image should be deleted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: referenced.path),
+                       "referenced image should survive")
+    }
+
+    // 21. fileIconName returns correct icons for known extensions.
+    func testFileIconName() {
+        XCTAssertEqual(fileIconName(forPath: "test.swift"), "chevron.left.forwardslash.chevron.right")
+        XCTAssertEqual(fileIconName(forPath: "test.png"), "photo")
+        XCTAssertEqual(fileIconName(forPath: "test.pdf"), "doc.richtext")
+        XCTAssertEqual(fileIconName(forPath: "test.unknown"), "doc")
+    }
 }

@@ -209,6 +209,7 @@ class ClipboardManager: ObservableObject {
         }
 
         loadItems()
+        cleanupOrphanedImages()
         lastChangeCount = NSPasteboard.general.changeCount
     }
 
@@ -492,6 +493,27 @@ class ClipboardManager: ObservableObject {
         } else {
             // Nothing selected yet: enter from the appropriate end.
             selectedItemID = (delta >= 0 ? list.first : list.last)?.id
+        }
+    }
+
+    /// Remove image files on disk that aren't referenced by any history item.
+    /// Called once at launch to prevent slow leakage from failed deletions.
+    private func cleanupOrphanedImages() {
+        // ponytail: standardised paths avoid /var vs /private/var symlink mismatches
+        let referencedPaths = Set(items.compactMap {
+            $0.imagePath.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        })
+        ioQueue.async { [weak self] in
+            guard let self else { return }
+            let imageDir = self.imageStorageURL.standardizedFileURL
+            guard let files = try? FileManager.default.contentsOfDirectory(
+                at: imageDir, includingPropertiesForKeys: nil
+            ) else { return }
+            for file in files {
+                if !referencedPaths.contains(file.standardizedFileURL.path) {
+                    try? FileManager.default.removeItem(at: file)
+                }
+            }
         }
     }
 
