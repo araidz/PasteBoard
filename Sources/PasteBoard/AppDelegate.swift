@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(
-            systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard.fill",
+            systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard",
             accessibilityDescription: "PasteBoard"
         )
 
@@ -84,12 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // Briefly flash the icon to the outline clipboard as a capture confirmation, then back to full.
+    // Briefly flash the icon to the filled clipboard as a capture confirmation, then back.
     @objc private func flashIcon() {
-        statusItem.button?.image = NSImage(systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard", accessibilityDescription: "Captured")
+        statusItem.button?.image = NSImage(systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard.fill", accessibilityDescription: "Captured")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             guard let self else { return }
-            self.statusItem.button?.image = NSImage(systemSymbolName: self.isTestBuild ? "doc.on.clipboard" : "clipboard.fill", accessibilityDescription: "PasteBoard")
+            self.statusItem.button?.image = NSImage(systemSymbolName: self.isTestBuild ? "doc.on.clipboard" : "clipboard", accessibilityDescription: "PasteBoard")
         }
     }
 

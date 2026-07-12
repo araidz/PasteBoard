@@ -240,11 +240,12 @@ class ClipboardManager: ObservableObject {
             return
         }
 
-        // Check for images. PNG encoding and the disk write are the expensive part,
-        // so they run on ioQueue rather than blocking the capture timer.
-        if let image = NSImage(pasteboard: pasteboard) {
+        // Check for images. Short-circuit on pasteboard.types to avoid
+        // decoding NSImage on the main thread when there's no image.
+        if pasteboard.types?.contains(.tiff) == true || pasteboard.types?.contains(.png) == true {
             ioQueue.async { [weak self] in
                 guard let self else { return }
+                guard let image = NSImage(pasteboard: pasteboard) else { return }
                 let imageID = UUID().uuidString
                 let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
                 guard let tiffData = image.tiffRepresentation,
@@ -322,7 +323,8 @@ class ClipboardManager: ObservableObject {
         for kw in keywords where trimmed.contains(kw) { score += 1 }
 
         // Density of punctuation that is common in code but rare in prose.
-        let codeCharCount = trimmed.filter { codeChars.contains($0) }.count
+        var codeCharCount = 0
+        for ch in trimmed { if codeChars.contains(ch) { codeCharCount += 1 } }
         if Double(codeCharCount) / Double(trimmed.count) > 0.06 { score += 1 }
 
         if trimmed.contains("{") && trimmed.contains("}") { score += 1 }
@@ -380,14 +382,14 @@ class ClipboardManager: ObservableObject {
 
     // ponytail: shared partition avoids repeating the same filter over the full array
     private func partitioned() -> (pinned: [ClipboardItem], unpinned: [ClipboardItem]) {
-        let p = items.filter { $0.pinned }
-        let u = items.filter { !$0.pinned }
+        var p: [ClipboardItem] = [], u: [ClipboardItem] = []
+        for item in items { if item.pinned { p.append(item) } else { u.append(item) } }
         return (p, u)
     }
 
     /// Enforce the 200-item window over unpinned items, leaving pinned ones untouched.
     private func trimUnpinned() {
-        let unpinned = items.filter { !$0.pinned }
+        let (_, unpinned) = partitioned()
         guard unpinned.count > maxItems else { return }
         let overflow = unpinned.suffix(unpinned.count - maxItems) // oldest unpinned
         let removeIDs = Set(overflow.map { $0.id })
