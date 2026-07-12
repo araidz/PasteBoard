@@ -306,17 +306,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ClipboardItemRow.isTerminalApp(name)
     }
 
-    /// Escape a path for a shell prompt the way dragging a file into Terminal does:
-    /// leave normal path characters bare and backslash-escape only what the shell
-    /// treats specially (spaces, quotes, globs, …). No wrapping quotes.
-    private static func shellEscape(_ path: String) -> String {
-        let safe = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-+,@%=:")
-        var out = ""
-        for ch in path {
-            if !safe.contains(ch) { out.append("\\") }
-            out.append(ch)
-        }
-        return out
+    /// Escape a path for shell pasting. Wraps in single quotes so every special
+    /// character is safe. Paths starting with "-" get a "--" prefix so they
+    /// aren't misinterpreted as flags by CLI tools.
+    /// ponytail: internal for testing — no production callers outside AppDelegate.
+    static func shellEscape(_ path: String) -> String {
+        if path.isEmpty { return "''" }
+        // Single-quote wrapping: escape ' by ending quote, adding \', re-opening.
+        let escaped = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        return path.hasPrefix("-") ? "-- " + escaped : escaped
     }
 }
 

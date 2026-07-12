@@ -225,4 +225,46 @@ final class PasteBoardTests: XCTestCase {
         let manager = ClipboardManager(baseDirectory: dir, keyProvider: { SymmetricKey(size: .bits256) })
         XCTAssertTrue(manager.items.contains { $0.textContent == "pre-encryption-item" })
     }
+
+    // MARK: - Phase 1: Critical Fixes
+
+    // 12. EncryptedStore errors provide diagnostic info (not opaque CocoaError).
+    func testEncryptedStoreErrorDescriptions() {
+        let encErr = EncryptedStoreError.encryptionFailed
+        XCTAssertTrue(encErr.description.contains("encryption"))
+
+        let readErr = EncryptedStoreError.keychainReadFailed(errSecItemNotFound)
+        XCTAssertTrue(readErr.description.contains("read"))
+        XCTAssertTrue(readErr.description.contains("\(errSecItemNotFound)"))
+
+        let writeErr = EncryptedStoreError.keychainWriteFailed(errSecDuplicateItem)
+        XCTAssertTrue(writeErr.description.contains("write"))
+        XCTAssertTrue(writeErr.description.contains("\(errSecDuplicateItem)"))
+    }
+
+    // 13. shellEscape wraps in single quotes and handles edge cases.
+    func testShellEscape() {
+        // Normal path — single-quoted, bare.
+        XCTAssertEqual(AppDelegate.shellEscape("/Users/me/file.txt"),
+                       "'/Users/me/file.txt'")
+
+        // Path with spaces.
+        XCTAssertEqual(AppDelegate.shellEscape("/Users/me/My File.txt"),
+                       "'/Users/me/My File.txt'")
+
+        // Path with single quote — escaped correctly.
+        XCTAssertEqual(AppDelegate.shellEscape("/Users/me/it's here.txt"),
+                       "'/Users/me/it'\\''s here.txt'")
+
+        // Path starting with dash — "--" prefix prevents flag interpretation.
+        XCTAssertEqual(AppDelegate.shellEscape("-flag.txt"),
+                       "-- '-flag.txt'")
+
+        // Empty string.
+        XCTAssertEqual(AppDelegate.shellEscape(""), "''")
+
+        // Path with shell-special characters.
+        XCTAssertEqual(AppDelegate.shellEscape("/tmp/$HOME `whoami` !*"),
+                       "'/tmp/$HOME `whoami` !*'")
+    }
 }

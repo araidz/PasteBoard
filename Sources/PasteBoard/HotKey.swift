@@ -15,11 +15,13 @@ final class HotKey {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: OSType(kEventHotKeyPressed)
         )
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        // Use passRetained so the HotKey stays alive while the handler is installed.
+        let selfPtr = Unmanaged.passRetained(self).toOpaque()
         InstallEventHandler(
             GetApplicationEventTarget(),
             { _, _, userData -> OSStatus in
-                let me = Unmanaged<HotKey>.fromOpaque(userData!).takeUnretainedValue()
+                guard let userData else { return OSStatus(eventNotHandledErr) }
+                let me = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
                 me.action()
                 return noErr
             },
@@ -33,5 +35,7 @@ final class HotKey {
     deinit {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let eventHandler { RemoveEventHandler(eventHandler) }
+        // Balance the passRetained in init.
+        Unmanaged<HotKey>.passUnretained(self).release()
     }
 }

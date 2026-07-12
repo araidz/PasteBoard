@@ -2,13 +2,28 @@ import CryptoKit
 import Foundation
 import Security
 
+/// Errors thrown by EncryptedStore operations.
+enum EncryptedStoreError: Error, CustomStringConvertible {
+    case encryptionFailed
+    case keychainReadFailed(OSStatus)
+    case keychainWriteFailed(OSStatus)
+
+    var description: String {
+        switch self {
+        case .encryptionFailed: return "AES-GCM encryption produced no combined box"
+        case .keychainReadFailed(let s): return "Keychain read failed (\(s))"
+        case .keychainWriteFailed(let s): return "Keychain write failed (\(s))"
+        }
+    }
+}
+
 /// AES-GCM encryption for the on-disk clipboard history. The key lives in the
 /// user's login Keychain — native OS secret storage, never written to disk
 /// alongside the data it protects, never leaves the device.
 enum EncryptedStore {
     static func encrypt(_ data: Data, key: SymmetricKey) throws -> Data {
         guard let combined = try AES.GCM.seal(data, using: key).combined else {
-            throw CocoaError(.coderInvalidValue)
+            throw EncryptedStoreError.encryptionFailed
         }
         return combined
     }
@@ -45,7 +60,7 @@ enum EncryptedStore {
         var result: AnyObject?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data else {
-            throw CocoaError(.coderValueNotFound)
+            throw EncryptedStoreError.keychainReadFailed(status)
         }
         return data
     }
@@ -53,8 +68,20 @@ enum EncryptedStore {
     private static func writeKeychain(_ data: Data) throws {
         var q = query()
         q[kSecValueData as String] = data
-        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(q as CFDictionary, nil)
-        guard status == errSecSuccess else { throw CocoaError(.coderInvalidValue) }
+        if status == errSecDuplicateItem {
+            // Key exists from a previous install — update in place rather than
+            // creating a new key (which would strand the encrypted history).
+            let update: [String: Any] = [kSecValueData as String: data]
+            let updateStatus = SecItemUpdate(query() as CFDictionary, update as CFDictionary)
+            guard updateStatus == errSecSuccess else {
+                throw EncryptedStoreError.keychainWriteFailed(updateStatus)
+            }
+        } else {
+            guard status == errSecSuccess else {
+                throw EncryptedStoreError.keychainWriteFailed(status)
+            }
+        }
     }
 }
