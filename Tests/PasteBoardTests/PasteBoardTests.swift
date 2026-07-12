@@ -242,29 +242,29 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertTrue(writeErr.description.contains("\(errSecDuplicateItem)"))
     }
 
-    // 13. shellEscape wraps in single quotes and handles edge cases.
+    // 13. shellEscape backslash-escapes special characters, no wrapping quotes.
     func testShellEscape() {
-        // Normal path — single-quoted, bare.
+        // Normal path — bare, no escaping needed.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/file.txt"),
-                       "'/Users/me/file.txt'")
+                       "/Users/me/file.txt")
 
-        // Path with spaces.
+        // Path with spaces — backslash-escaped.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/My File.txt"),
-                       "'/Users/me/My File.txt'")
+                       "/Users/me/My\\ File.txt")
 
-        // Path with single quote — escaped correctly.
+        // Path with single quote — escaped.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/it's here.txt"),
-                       "'/Users/me/it'\\''s here.txt'")
+                       "/Users/me/it\\'s\\ here.txt")
 
-        // Path starting with dash — "--" prefix prevents flag interpretation.
+        // Path starting with dash — left as-is (terminal handles it).
         XCTAssertEqual(AppDelegate.shellEscape("-flag.txt"),
-                       "-- '-flag.txt'")
+                       "-flag.txt")
 
         // Empty string.
-        XCTAssertEqual(AppDelegate.shellEscape(""), "''")
+        XCTAssertEqual(AppDelegate.shellEscape(""), "")
 
         // Path with shell-special characters.
         XCTAssertEqual(AppDelegate.shellEscape("/tmp/$HOME `whoami` !*"),
-                       "'/tmp/$HOME `whoami` !*'")
+                       "/tmp/\\$HOME\\ \\`whoami\\`\\ \\!\\*")
     }
 }

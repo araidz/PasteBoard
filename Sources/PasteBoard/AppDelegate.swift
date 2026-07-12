@@ -306,15 +306,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ClipboardItemRow.isTerminalApp(name)
     }
 
-    /// Escape a path for shell pasting. Wraps in single quotes so every special
-    /// character is safe. Paths starting with "-" get a "--" prefix so they
-    /// aren't misinterpreted as flags by CLI tools.
+    /// Escape a path for shell pasting. Backslash-escapes only what the shell
+    /// treats specially (spaces, quotes, globs, etc). No wrapping quotes —
+    /// the path lands in the terminal exactly as it appears on disk.
     /// ponytail: internal for testing — no production callers outside AppDelegate.
     static func shellEscape(_ path: String) -> String {
-        if path.isEmpty { return "''" }
-        // Single-quote wrapping: escape ' by ending quote, adding \', re-opening.
-        let escaped = "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
-        return path.hasPrefix("-") ? "-- " + escaped : escaped
+        if path.isEmpty { return "" }
+        let shellSpecial = Set("\\'\"`$!#*?|[](){}<>~; \t\n")
+        var out = ""
+        for ch in path {
+            if shellSpecial.contains(ch) { out.append("\\") }
+            out.append(ch)
+        }
+        return out
     }
 }
 
