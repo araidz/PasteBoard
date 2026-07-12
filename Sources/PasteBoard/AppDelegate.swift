@@ -34,12 +34,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch { NSLog("launch-at-login toggle failed: \(error)") }
     }
 
+    // Test builds use a different bundle ID and a distinct menu bar icon.
+    private var isTestBuild: Bool {
+        Bundle.main.bundleIdentifier == "com.local.pasteboard.test"
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         statusItem.button?.image = NSImage(
-            systemSymbolName: "clipboard.fill",
+            systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard.fill",
             accessibilityDescription: "PasteBoard"
         )
 
@@ -81,9 +86,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Briefly flash the icon to the outline clipboard as a capture confirmation, then back to full.
     @objc private func flashIcon() {
-        statusItem.button?.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Captured")
+        statusItem.button?.image = NSImage(systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard", accessibilityDescription: "Captured")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            self?.statusItem.button?.image = NSImage(systemSymbolName: "clipboard.fill", accessibilityDescription: "PasteBoard")
+            guard let self else { return }
+            self.statusItem.button?.image = NSImage(systemSymbolName: self.isTestBuild ? "doc.on.clipboard" : "clipboard.fill", accessibilityDescription: "PasteBoard")
         }
     }
 

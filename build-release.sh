@@ -28,8 +28,10 @@ if $TEST_MODE; then
   APP_NAME="PasteBoard-Test"
   BUNDLE_ID="com.local.pasteboard.test"
   ICON_SRC="Resources/AppIcon-Test.icns"
+  ICON_NAME="AppIcon-Test"
 else
   ICON_SRC="Resources/AppIcon.icns"
+  ICON_NAME="AppIcon"
 fi
 
 DIST="dist"
@@ -52,7 +54,7 @@ echo "▸ Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/PasteBoard"
-cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.icns"
+cp "$ICON_SRC" "$APP/Contents/Resources/$ICON_NAME.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -65,7 +67,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleExecutable</key>
 	<string>PasteBoard</string>
 	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
+	<string>$ICON_NAME</string>
 	<key>CFBundleIdentifier</key>
 	<string>$BUNDLE_ID</string>
 	<key>CFBundleName</key>
