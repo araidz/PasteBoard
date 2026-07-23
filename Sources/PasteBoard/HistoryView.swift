@@ -13,10 +13,13 @@ struct HistoryView: View {
     var isLaunchAtLogin: () -> Bool = { false }
     var onEnableAccessibility: () -> Void = {}
     var isTrusted: () -> Bool = { false }
+    var onHotKeyChanged: () -> Void = {}
     var onQuit: () -> Void = {}
     // Same UserDefaults key AppDelegate reads for the auto-paste gate; @AppStorage keeps
     // the menu checkmark live.
     @AppStorage("autoPasteEnabled") private var autoPasteEnabled = true
+    // Selected global-hotkey preset id; AppDelegate re-registers via onHotKeyChanged.
+    @AppStorage("hotKeyPresetID") private var hotKeyPresetID = "ctrl-cmd-v"
     @FocusState private var searchFocused: Bool
 
     var body: some View {
@@ -82,6 +85,14 @@ struct HistoryView: View {
             Menu("History Limit") {
                 ForEach([50, 100, 200, 500, 1000], id: \.self) { n in
                     Toggle("\(n) items", isOn: Binding(get: { manager.maxItems == n }, set: { _ in manager.maxItems = n }))
+                }
+            }
+            Menu("Hotkey") {
+                ForEach(HotKeyPreset.all) { preset in
+                    Toggle(preset.label, isOn: Binding(
+                        get: { hotKeyPresetID == preset.id },
+                        set: { _ in hotKeyPresetID = preset.id; onHotKeyChanged() }
+                    ))
                 }
             }
             Divider()

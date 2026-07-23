@@ -3,7 +3,7 @@ import SwiftUI
 import Carbon.HIToolbox
 import ServiceManagement
 
-// The app delegate: menu-bar item, global ⌥⌘V hotkey, the clipboard-capture timer,
+// The app delegate: menu-bar item, the user-pickable global hotkey, the clipboard-capture timer,
 // the floating history panel, keyboard navigation, and commit → auto-paste.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -63,16 +63,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, self.window?.isVisible == true else { return }
             self.closeWindow()
         }
-        // ⌥⌘V from any app opens/closes the window (captures the target at press time).
-        hotKey = HotKey(keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(cmdKey | optionKey)) { [weak self] in
-            self?.lastOpenFromIcon = false
-            self?.toggleWindow()
-        }
+        // The chosen global hotkey opens/closes the window from any app.
+        registerHotKey()
         // After an update macOS can drop the Accessibility grant (self-signed apps
         // re-verify on each new binary). If auto-paste is on but we're no longer trusted,
         // nudge to re-enable — deferred so the menu-bar item is up first. Silent when trusted.
         if autoPasteEnabled && !AutoPaste.isTrusted {
             DispatchQueue.main.async { AutoPaste.requestPermission() }
+        }
+    }
+
+    // (Re)bind the global hotkey to the currently selected preset. Clearing the old
+    // HotKey first triggers its deinit → UnregisterEventHotKey, so the previous combo
+    // reverts to its macOS default before the new one is registered.
+    private func registerHotKey() {
+        hotKey = nil
+        let preset = HotKeyPreset.current
+        hotKey = HotKey(keyCode: preset.keyCode, modifiers: preset.modifiers) { [weak self] in
+            self?.lastOpenFromIcon = false
+            self?.toggleWindow()
         }
     }
 
@@ -174,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isLaunchAtLogin: { [weak self] in self?.isLaunchAtLogin ?? false },
                 onEnableAccessibility: { AutoPaste.requestPermission() },
                 isTrusted: { AutoPaste.isTrusted },
+                onHotKeyChanged: { [weak self] in self?.registerHotKey() },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
