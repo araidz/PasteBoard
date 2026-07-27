@@ -115,26 +115,27 @@ class ClipboardManager: ObservableObject {
     private var lastChangeCount: Int = 0
     // Rolling-window size for unpinned items, user-adjustable from the menu and
     // persisted across launches. Changing it re-trims immediately.
-    @Published var maxItems: Int = (UserDefaults.standard.object(forKey: "maxItems") as? Int) ?? 200 {
+    @Published var maxItems: Int {
         didSet {
             guard maxItems != oldValue else { return }
-            UserDefaults.standard.set(maxItems, forKey: "maxItems")
+            defaults.set(maxItems, forKey: "maxItems")
             trimUnpinned()
             saveItems()
         }
     }
     // Maximum size in bytes for a single clipboard item. Items exceeding this
     // are silently skipped to prevent memory/disk bloat from huge images.
-    @Published var maxItemSizeBytes: Int = (UserDefaults.standard.object(forKey: "maxItemSizeBytes") as? Int) ?? 10_000_000 {
+    @Published var maxItemSizeBytes: Int {
         didSet {
             guard maxItemSizeBytes != oldValue else { return }
-            UserDefaults.standard.set(maxItemSizeBytes, forKey: "maxItemSizeBytes")
+            defaults.set(maxItemSizeBytes, forKey: "maxItemSizeBytes")
         }
     }
+    private let defaults: UserDefaults
     private let storageURL: URL          // unpinned history
     private let pinnedStorageURL: URL    // pinned items, persisted separately
     private let imageStorageURL: URL
-    private let historyKey: SymmetricKey
+    private var historyKey: SymmetricKey?
     // All disk writes/deletions run here so pin/delete update the UI instantly.
     private let ioQueue = DispatchQueue(label: "com.local.pasteboard.io", qos: .utility)
     // Coalesces rapid mutations (e.g. repeated pin toggles) into a single write.
@@ -149,9 +150,12 @@ class ClipboardManager: ObservableObject {
 
     private func removeFiles(_ paths: [String]) {
         guard !paths.isEmpty else { return }
+        let imageDirectory = imageStorageURL.standardizedFileURL.resolvingSymlinksInPath()
         ioQueue.async {
             for path in paths {
-                try? FileManager.default.removeItem(atPath: path)
+                let file = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+                guard file.deletingLastPathComponent() == imageDirectory else { continue }
+                try? FileManager.default.removeItem(at: file)
             }
         }
     }
@@ -175,6 +179,9 @@ class ClipboardManager: ObservableObject {
         } else {
             result = base.filter { item in
                 item.displayText.localizedCaseInsensitiveContains(searchText)
+                    || item.sourceApp?.localizedCaseInsensitiveContains(searchText) == true
+                    || item.filePaths?.contains(where: { $0.localizedCaseInsensitiveContains(searchText) }) == true
+                    || item.type.rawValue.localizedCaseInsensitiveContains(searchText)
             }
         }
         cachedFiltered = result
@@ -182,7 +189,15 @@ class ClipboardManager: ObservableObject {
     }
 
     /// `baseDirectory` lets tests redirect storage away from Application Support.
-    init(baseDirectory: URL? = nil, keyProvider: () throws -> SymmetricKey = EncryptedStore.persistentKey) {
+    init(
+        baseDirectory: URL? = nil,
+        defaults: UserDefaults = .standard,
+        keyProvider: () throws -> SymmetricKey = EncryptedStore.persistentKey
+    ) {
+        self.defaults = defaults
+        maxItems = (defaults.object(forKey: "maxItems") as? Int) ?? 200
+        maxItemSizeBytes = (defaults.object(forKey: "maxItemSizeBytes") as? Int) ?? 10_000_000
+
         let appDir: URL
         if let baseDirectory {
             appDir = baseDirectory
@@ -203,21 +218,38 @@ class ClipboardManager: ObservableObject {
         do {
             historyKey = try keyProvider()
         } catch {
-            // Keychain unavailable (rare): fall back to a session-only key so the app
-            // still runs — history just won't survive a restart decryptable.
-            NSLog("PasteBoard: history key unavailable, using a session-only key — \(error.localizedDescription)")
-            historyKey = SymmetricKey(size: .bits256)
+            NSLog("PasteBoard: history key unavailable; capture disabled to preserve existing history — \(error)")
+            historyKey = nil
         }
 
-        loadItems()
-        cleanupOrphanedImages()
+        if historyKey != nil {
+            if loadItems() {
+                cleanupOrphanedImages()
+            } else {
+                // Never overwrite or clean up data that failed authentication/loading.
+                historyKey = nil
+            }
+        }
         lastChangeCount = NSPasteboard.general.changeCount
     }
 
+    private static let ignoredPasteboardTypes = Set([
+        NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"),
+        NSPasteboard.PasteboardType("org.nspasteboard.TransientType"),
+        NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType")
+    ])
+
+    static func shouldIgnore(types: [NSPasteboard.PasteboardType]?) -> Bool {
+        guard let types else { return false }
+        return !ignoredPasteboardTypes.isDisjoint(with: types)
+    }
+
     func checkForChanges() {
+        guard historyKey != nil else { return }
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
+        guard !Self.shouldIgnore(types: pasteboard.types) else { return }
 
         let sourceApp = NSWorkspace.shared.frontmostApplication?.localizedName
 
@@ -244,16 +276,18 @@ class ClipboardManager: ObservableObject {
         // Check for images. Short-circuit on pasteboard.types to avoid
         // decoding NSImage on the main thread when there's no image.
         if pasteboard.types?.contains(.tiff) == true || pasteboard.types?.contains(.png) == true {
+            let maxSize = maxItemSizeBytes
+            guard let imageData = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return }
             ioQueue.async { [weak self] in
                 guard let self else { return }
-                guard let image = NSImage(pasteboard: pasteboard) else { return }
+                guard let image = NSImage(data: imageData) else { return }
                 let imageID = UUID().uuidString
                 let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
                 guard let tiffData = image.tiffRepresentation,
                       let bitmap = NSBitmapImageRep(data: tiffData),
                       let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
                 // Skip oversized images to prevent memory/disk bloat.
-                guard pngData.count <= self.maxItemSizeBytes else { return }
+                guard pngData.count <= maxSize else { return }
                 do {
                     try pngData.write(to: imagePath)
                 } catch {
@@ -399,46 +433,50 @@ class ClipboardManager: ObservableObject {
         items.removeAll { removeIDs.contains($0.id) }
     }
 
-    func pasteItem(_ item: ClipboardItem) {
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-
+    @discardableResult
+    func pasteItem(_ item: ClipboardItem, to pasteboard: NSPasteboard = .general) -> Bool {
+        let written: Bool
         switch item.type {
         case .text, .code:
-            if let text = item.textContent {
-                pasteboard.setString(text, forType: .string)
-            }
+            guard let text = item.textContent else { return false }
+            pasteboard.clearContents()
+            written = pasteboard.setString(text, forType: .string)
         case .image:
-            if let path = item.imagePath,
-               let image = NSImage(contentsOfFile: path) {
-                pasteboard.writeObjects([image])
-            }
+            guard let path = item.imagePath, let image = NSImage(contentsOfFile: path) else { return false }
+            pasteboard.clearContents()
+            written = pasteboard.writeObjects([image])
         case .file, .folder:
-            if let paths = item.filePaths {
-                let urls = paths.compactMap { URL(fileURLWithPath: $0) } as [NSURL]
-                pasteboard.writeObjects(urls)
-            }
+            guard let paths = item.filePaths, !paths.isEmpty,
+                  paths.allSatisfy(FileManager.default.fileExists(atPath:)) else { return false }
+            let urls = paths.map { URL(fileURLWithPath: $0) as NSURL }
+            pasteboard.clearContents()
+            written = pasteboard.writeObjects(urls)
         }
 
+        guard written else { return false }
         // Update the change count so we don't re-capture what we just pasted
-        lastChangeCount = pasteboard.changeCount
+        if pasteboard == .general { lastChangeCount = pasteboard.changeCount }
+        return true
     }
 
     /// Paste a single member of a multi-file group (one file URL).
-    func pasteSubPath(_ path: String) {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    func pasteSubPath(_ path: String, to pasteboard: NSPasteboard = .general) -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
         pasteboard.clearContents()
-        pasteboard.writeObjects([URL(fileURLWithPath: path) as NSURL])
-        lastChangeCount = pasteboard.changeCount
+        guard pasteboard.writeObjects([URL(fileURLWithPath: path) as NSURL]) else { return false }
+        if pasteboard == .general { lastChangeCount = pasteboard.changeCount }
+        return true
     }
 
     /// Put plain text on the clipboard — used to paste a file's path into a terminal,
     /// which can't accept a file-url. Guards re-capture like the other paste methods.
-    func pasteText(_ text: String) {
-        let pasteboard = NSPasteboard.general
+    @discardableResult
+    func pasteText(_ text: String, to pasteboard: NSPasteboard = .general) -> Bool {
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-        lastChangeCount = pasteboard.changeCount
+        guard pasteboard.setString(text, forType: .string) else { return false }
+        if pasteboard == .general { lastChangeCount = pasteboard.changeCount }
+        return true
     }
 
     /// Toggle the pinned state of an item, then re-persist.
@@ -481,6 +519,15 @@ class ClipboardManager: ObservableObject {
     var selectedItem: ClipboardItem? {
         guard let id = selectedItemID else { return nil }
         return items.first { $0.id == id }
+    }
+
+    func togglePreview() {
+        if isPreviewing {
+            isPreviewing = false
+        } else if let item = selectedItem ?? filteredItems.first {
+            selectedItemID = item.id
+            isPreviewing = true
+        }
     }
 
     /// Move the highlighted row through the currently displayed list.
@@ -526,20 +573,20 @@ class ClipboardManager: ObservableObject {
     // MARK: - Persistence
 
     private func saveItems() {
+        guard let historyKey else { return }
         // Snapshot on the main thread, then encode + write off the main thread.
         // A burst of mutations (rapid pin toggles, a flurry of captures) collapses
         // into a single write via the debounced work item.
         let (pinned, unpinned) = partitioned()
         let storageURL = self.storageURL
         let pinnedStorageURL = self.pinnedStorageURL
-        let historyKey = self.historyKey
         // Manage pendingSave entirely on ioQueue to avoid cross-thread races.
         let work = DispatchWorkItem {
             do {
                 let unpinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
                 let pinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: historyKey)
-                try unpinnedData.write(to: storageURL)
-                try pinnedData.write(to: pinnedStorageURL)
+                try unpinnedData.write(to: storageURL, options: .atomic)
+                try pinnedData.write(to: pinnedStorageURL, options: .atomic)
             } catch {
                 NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
             }
@@ -552,44 +599,57 @@ class ClipboardManager: ObservableObject {
         }
     }
 
-    private func loadItems() {
+    func flush() {
+        guard let historyKey else { return }
+        let (pinned, unpinned) = partitioned()
+        let storageURL = self.storageURL
+        let pinnedStorageURL = self.pinnedStorageURL
+        ioQueue.sync {
+            pendingSave?.cancel()
+            pendingSave = nil
+            do {
+                try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
+                    .write(to: storageURL, options: .atomic)
+                try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: historyKey)
+                    .write(to: pinnedStorageURL, options: .atomic)
+            } catch {
+                NSLog("PasteBoard: failed to flush history — \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func loadItems() -> Bool {
         var pinned: [ClipboardItem] = []
         var unpinned: [ClipboardItem] = []
+        var loadedSuccessfully = true
         if let data = try? Data(contentsOf: pinnedStorageURL) {
             if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
                 pinned = saved.map { var i = $0; i.pinned = true; return i }
             } else {
-                // Corrupt pinned file — preserve as .corrupt for debugging.
-                // ponytail: UUID suffix avoids race if loadItems runs concurrently
-                NSLog("PasteBoard: pinned history corrupted, preserving backup")
-                let corruptURL = pinnedStorageURL.deletingPathExtension()
-                    .appendingPathExtension("pinned.\(UUID().uuidString.prefix(8)).corrupt")
-                try? FileManager.default.removeItem(at: corruptURL)
-                try? FileManager.default.moveItem(at: pinnedStorageURL, to: corruptURL)
+                loadedSuccessfully = false
+                NSLog("PasteBoard: pinned history could not be authenticated or decoded; leaving it untouched")
             }
         }
         if let data = try? Data(contentsOf: storageURL) {
             if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
                 unpinned = saved.map { var i = $0; i.pinned = false; return i }
             } else {
-                // Corrupt history file — preserve as .corrupt for debugging.
-                // ponytail: UUID suffix avoids race if loadItems runs concurrently
-                NSLog("PasteBoard: history corrupted, preserving backup")
-                let corruptURL = storageURL.deletingPathExtension()
-                    .appendingPathExtension("history.\(UUID().uuidString.prefix(8)).corrupt")
-                try? FileManager.default.removeItem(at: corruptURL)
-                try? FileManager.default.moveItem(at: storageURL, to: corruptURL)
+                loadedSuccessfully = false
+                NSLog("PasteBoard: history could not be authenticated or decoded; leaving it untouched")
             }
         }
+        guard loadedSuccessfully else { return false }
         // Keep a single recency-ordered array; `orderedItems` floats pins to the top.
         items = (pinned + unpinned).sorted { $0.timestamp > $1.timestamp }
+        return true
     }
 
     /// Decrypts `data` (current on-disk format); falls back to plain JSON so
     /// histories written before encryption existed still load. The next save
     /// re-persists the file encrypted.
     private func decodeHistory<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-        let plaintext = (try? EncryptedStore.decrypt(data, key: historyKey)) ?? data
-        return try JSONDecoder().decode(type, from: plaintext)
+        if let legacy = try? JSONDecoder().decode(type, from: data) { return legacy }
+        guard let historyKey else { throw EncryptedStoreError.encryptionFailed }
+        return try JSONDecoder().decode(type, from: EncryptedStore.decrypt(data, key: historyKey))
     }
 }

@@ -182,7 +182,7 @@ private func resolveFileIconName(forExtension ext: String) -> String {
     case "obj", "stl", "fbx", "gltf", "glb", "usdz", "usd", "blend", "dae", "3ds", "step", "stp":
         return "cube"
     // Certificates / keys
-    case "pem", "crt", "cer", "der", "key", "p12", "pfx", "pub", "gpg", "asc":
+    case "pem", "crt", "cer", "der", "p12", "pfx", "pub", "gpg", "asc":
         return "key"
     // Apps / executables / installers
     case "app", "exe", "appimage", "msi", "apk", "jar", "bin", "run":
@@ -303,6 +303,7 @@ struct ClipboardItemRow: View {
     let isSelected: Bool
     // 1–9 for the first nine rows → shows a ⌘N quick-paste hint. nil otherwise.
     var shortcutIndex: Int? = nil
+    let onSelect: () -> Void
     let onPaste: () -> Void
     // Paste a single member of a multi-file group. Unused for non-group rows.
     var onPastePath: (String) -> Void = { _ in }
@@ -400,8 +401,7 @@ struct ClipboardItemRow: View {
         .padding(.vertical, 5)
         .background(highlightBackground)
         .contentShape(Rectangle())
-        // Double-click pastes; single click does nothing (highlight via arrows only).
-        .overlay(ClickCatcher { if $0 >= 2 { onPaste() } })
+        .overlay(ClickCatcher { $0 >= 2 ? onPaste() : onSelect() })
     }
 
     // MARK: - Multi-file group
@@ -460,7 +460,10 @@ struct ClipboardItemRow: View {
         // Double-click pastes the whole group; single click toggles expand.
         .overlay(ClickCatcher { count in
             if count >= 2 { onPaste() }
-            else { withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() } }
+            else {
+                onSelect()
+                withAnimation(.easeInOut(duration: 0.12)) { expanded.toggle() }
+            }
         })
     }
 

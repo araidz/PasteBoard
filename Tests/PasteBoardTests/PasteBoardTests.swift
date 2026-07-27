@@ -7,9 +7,17 @@ final class PasteBoardTests: XCTestCase {
     // Fresh, isolated storage per manager so nothing touches real history — and an
     // in-memory key so tests never read/write the real login Keychain.
     private static let ephemeralKey = SymmetricKey(size: .bits256)
+    private func isolatedDefaults() -> UserDefaults {
+        let suite = "PasteBoardTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
     private func makeManager() -> ClipboardManager {
         ClipboardManager(
             baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+            defaults: isolatedDefaults(),
             keyProvider: { Self.ephemeralKey }
         )
     }
@@ -199,18 +207,16 @@ final class PasteBoardTests: XCTestCase {
         let key = SymmetricKey(size: .bits256)
         let secret = "super-secret-token-\(UUID().uuidString)"
 
-        let writer = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+        let writer = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { key })
         writer.insert(textItem(secret))
 
-        let saved = expectation(description: "debounced save lands on disk")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.6) { saved.fulfill() }
-        wait(for: [saved], timeout: 2)
+        writer.flush()
 
         let onDisk = try Data(contentsOf: dir.appendingPathComponent("history.json"))
         XCTAssertFalse(String(data: onDisk, encoding: .utf8)?.contains(secret) ?? false,
                         "history.json must not contain the plaintext secret")
 
-        let reader = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+        let reader = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { key })
         XCTAssertTrue(reader.items.contains { $0.textContent == secret })
     }
 
@@ -222,7 +228,7 @@ final class PasteBoardTests: XCTestCase {
         let legacyItem = textItem("pre-encryption-item")
         try JSONEncoder().encode([legacyItem]).write(to: dir.appendingPathComponent("history.json"))
 
-        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { SymmetricKey(size: .bits256) })
+        let manager = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { SymmetricKey(size: .bits256) })
         XCTAssertTrue(manager.items.contains { $0.textContent == "pre-encryption-item" })
     }
 
@@ -242,30 +248,22 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertTrue(writeErr.description.contains("\(errSecDuplicateItem)"))
     }
 
-    // 13. shellEscape backslash-escapes special characters, no wrapping quotes.
+    // 13. shellEscape handles every path as one single-quoted shell word.
     func testShellEscape() {
-        // Normal path — bare, no escaping needed.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/file.txt"),
-                       "/Users/me/file.txt")
+                       "'/Users/me/file.txt'")
 
-        // Path with spaces — backslash-escaped.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/My File.txt"),
-                       "/Users/me/My\\ File.txt")
+                       "'/Users/me/My File.txt'")
 
-        // Path with single quote — escaped.
         XCTAssertEqual(AppDelegate.shellEscape("/Users/me/it's here.txt"),
-                       "/Users/me/it\\'s\\ here.txt")
+                       "'/Users/me/it'\\''s here.txt'")
 
-        // Path starting with dash — left as-is (terminal handles it).
-        XCTAssertEqual(AppDelegate.shellEscape("-flag.txt"),
-                       "-flag.txt")
+        XCTAssertEqual(AppDelegate.shellEscape("/tmp/a\nb"), "'/tmp/a\nb'")
+        XCTAssertEqual(AppDelegate.shellEscape(""), "''")
 
-        // Empty string.
-        XCTAssertEqual(AppDelegate.shellEscape(""), "")
-
-        // Path with shell-special characters.
         XCTAssertEqual(AppDelegate.shellEscape("/tmp/$HOME `whoami` !*"),
-                       "/tmp/\\$HOME\\ \\`whoami\\`\\ \\!\\*")
+                       "'/tmp/$HOME `whoami` !*'")
     }
 
     // MARK: - Phase 2: Core Manager
@@ -283,20 +281,21 @@ final class PasteBoardTests: XCTestCase {
                        ["newest-pinned", "newer-pinned", "old-pinned", "unpinned"])
     }
 
-    // 15. Corrupt history file is preserved as .corrupt, app starts clean.
-    func testCorruptHistoryPreservedAsBackup() throws {
+    // 15. Unreadable history stays untouched and disables startup cleanup.
+    func testUnreadableHistoryAndImagesStayUntouched() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        // Write garbage to history.json.
-        try "NOT_VALID_JSON_OR_ENCRYPTED".data(using: .utf8)!.write(to: dir.appendingPathComponent("history.json"))
+        let images = dir.appendingPathComponent("Images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let history = dir.appendingPathComponent("history.json")
+        let image = images.appendingPathComponent("existing.png")
+        let original = Data("NOT_VALID_JSON_OR_ENCRYPTED".utf8)
+        try original.write(to: history)
+        try Data("existing image".utf8).write(to: image)
 
-        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { SymmetricKey(size: .bits256) })
-        // History should be empty (no crash).
+        let manager = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { SymmetricKey(size: .bits256) })
         XCTAssertTrue(manager.items.isEmpty)
-        // Original file moved to .corrupt.
-        let corruptURL = dir.appendingPathComponent("history.corrupt")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: corruptURL.path),
-                      "corrupt file should be preserved at \(corruptURL)")
+        XCTAssertEqual(try Data(contentsOf: history), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: image.path))
     }
 
     // 16. Image items dedup by file path.
@@ -374,17 +373,19 @@ final class PasteBoardTests: XCTestCase {
         try data.write(to: dir.appendingPathComponent("history.json"))
 
         // Creating the manager triggers loadItems + cleanupOrphanedImages.
-        let manager = ClipboardManager(baseDirectory: dir, keyProvider: { key })
+        let manager = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { key })
 
-        // Wait for async cleanup on ioQueue.
-        let cleaned = expectation(description: "orphan cleanup")
-        DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { cleaned.fulfill() }
-        wait(for: [cleaned], timeout: 3)
+        withExtendedLifetime(manager) {
+            // Wait for async cleanup on ioQueue.
+            let cleaned = expectation(description: "orphan cleanup")
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.8) { cleaned.fulfill() }
+            wait(for: [cleaned], timeout: 3)
 
-        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path),
-                       "orphaned image should be deleted")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: referenced.path),
-                       "referenced image should survive")
+            XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path),
+                           "orphaned image should be deleted")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: referenced.path),
+                          "referenced image should survive")
+        }
     }
 
     // 21. fileIconName returns correct icons for known extensions.
@@ -393,5 +394,45 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(fileIconName(forPath: "test.png"), "photo")
         XCTAssertEqual(fileIconName(forPath: "test.pdf"), "doc.richtext")
         XCTAssertEqual(fileIconName(forPath: "test.unknown"), "doc")
+    }
+
+    func testConcealedAndTransientPasteboardsAreIgnored() {
+        XCTAssertTrue(ClipboardManager.shouldIgnore(types: [.init("org.nspasteboard.ConcealedType")]))
+        XCTAssertTrue(ClipboardManager.shouldIgnore(types: [.init("org.nspasteboard.TransientType")]))
+        XCTAssertTrue(ClipboardManager.shouldIgnore(types: [.init("org.nspasteboard.AutoGeneratedType")]))
+        XCTAssertFalse(ClipboardManager.shouldIgnore(types: [.string, .png]))
+    }
+
+    func testMissingImageDoesNotClearClipboard() {
+        let manager = makeManager()
+        let pasteboard = NSPasteboard(name: .init("PasteBoardTests.\(UUID().uuidString)"))
+        pasteboard.clearContents()
+        pasteboard.setString("keep me", forType: .string)
+        let missing = ClipboardItem(
+            id: UUID(), type: .image, textContent: nil,
+            imagePath: "/does/not/exist.png", filePaths: nil,
+            timestamp: Date(), sourceApp: nil
+        )
+
+        XCTAssertFalse(manager.pasteItem(missing, to: pasteboard))
+        XCTAssertEqual(pasteboard.string(forType: .string), "keep me")
+    }
+
+    func testKeyProviderFailureLeavesStoredDataUntouched() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let images = dir.appendingPathComponent("Images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let history = dir.appendingPathComponent("history.json")
+        let image = images.appendingPathComponent("existing.png")
+        let original = Data("encrypted history".utf8)
+        try original.write(to: history)
+        try Data("existing image".utf8).write(to: image)
+
+        _ = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults()) {
+            throw EncryptedStoreError.keychainReadFailed(errSecAuthFailed)
+        }
+
+        XCTAssertEqual(try Data(contentsOf: history), original)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: image.path))
     }
 }

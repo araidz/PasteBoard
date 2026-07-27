@@ -34,17 +34,16 @@ final class HotKey {
     private var eventHandler: EventHandlerRef?
     private let action: () -> Void
 
-    init(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
+    init?(keyCode: UInt32, modifiers: UInt32, action: @escaping () -> Void) {
         self.action = action
 
         var spec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind: OSType(kEventHotKeyPressed)
         )
-        // Use passRetained so the HotKey stays alive while the handler is installed.
-        // ponytail: passRetained keeps HotKey alive for the Carbon callback lifetime — leaks if deinit never runs (e.g. orphaned ref).
-        let selfPtr = Unmanaged.passRetained(self).toOpaque()
-        InstallEventHandler(
+        // AppDelegate owns this object for exactly as long as Carbon can call it.
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let handlerStatus = InstallEventHandler(
             GetApplicationEventTarget(),
             { _, _, userData -> OSStatus in
                 guard let userData else { return OSStatus(eventNotHandledErr) }
@@ -54,17 +53,19 @@ final class HotKey {
             },
             1, &spec, selfPtr, &eventHandler
         )
+        guard handlerStatus == noErr else { return nil }
 
         let id = EventHotKeyID(signature: OSType(0x54505354), id: 1) // 'TPST'
-        RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        let registrationStatus = RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
+        guard registrationStatus == noErr else {
+            if let eventHandler { RemoveEventHandler(eventHandler) }
+            eventHandler = nil
+            return nil
+        }
     }
 
     deinit {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
         if let eventHandler { RemoveEventHandler(eventHandler) }
-        // Balance the passRetained in init. The assertion is a development
-        // aid — passUnretained(self) never returns nil, but the release()
-        // only matters if the retain in init actually balanced.
-        Unmanaged<HotKey>.passUnretained(self).release()
     }
 }

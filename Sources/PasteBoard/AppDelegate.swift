@@ -64,25 +64,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.closeWindow()
         }
         // The chosen global hotkey opens/closes the window from any app.
-        registerHotKey()
-        // After an update macOS can drop the Accessibility grant (self-signed apps
-        // re-verify on each new binary). If auto-paste is on but we're no longer trusted,
-        // nudge to re-enable — deferred so the menu-bar item is up first. Silent when trusted.
-        if autoPasteEnabled && !AutoPaste.isTrusted {
-            DispatchQueue.main.async { AutoPaste.requestPermission() }
+        if !registerHotKey(), HotKeyPreset.current.id != HotKeyPreset.all[0].id {
+            _ = registerHotKey(HotKeyPreset.all[0])
         }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        clipboardManager.flush()
     }
 
     // (Re)bind the global hotkey to the currently selected preset. Clearing the old
     // HotKey first triggers its deinit → UnregisterEventHotKey, so the previous combo
     // reverts to its macOS default before the new one is registered.
-    private func registerHotKey() {
-        hotKey = nil
-        let preset = HotKeyPreset.current
-        hotKey = HotKey(keyCode: preset.keyCode, modifiers: preset.modifiers) { [weak self] in
+    @discardableResult
+    private func registerHotKey(_ preset: HotKeyPreset = .current) -> Bool {
+        guard let replacement = HotKey(keyCode: preset.keyCode, modifiers: preset.modifiers, action: { [weak self] in
             self?.lastOpenFromIcon = false
             self?.toggleWindow()
+        }) else {
+            NSLog("PasteBoard: failed to register global hotkey \(preset.label)")
+            return false
         }
+        hotKey = replacement
+        UserDefaults.standard.set(preset.id, forKey: "hotKeyPresetID")
+        return true
     }
 
     // MARK: - Clipboard capture
@@ -183,7 +188,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isLaunchAtLogin: { [weak self] in self?.isLaunchAtLogin ?? false },
                 onEnableAccessibility: { AutoPaste.requestPermission() },
                 isTrusted: { AutoPaste.isTrusted },
-                onHotKeyChanged: { [weak self] in self?.registerHotKey() },
+                onHotKeyChanged: { [weak self] preset in self?.registerHotKey(preset) ?? false },
                 onQuit: { NSApp.terminate(nil) }
             )
         )
@@ -215,6 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window = w
         // Capture the app to paste back into — never ourselves (compare by pid so
         // it's robust whether or not this build has a bundle id).
+        capturedApp = nil
         if let front = NSWorkspace.shared.frontmostApplication,
            front.processIdentifier != NSRunningApplication.current.processIdentifier {
             capturedApp = front
@@ -247,14 +253,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
                 switch event.keyCode {
-                case 35:  // P — pin/unpin the highlighted row
+                case 35 where !self.clipboardManager.isSearchFocused:  // P — pin/unpin the highlighted row
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.togglePin(item) }
                     return nil
-                case 51:  // ⌫ — delete the highlighted row (pinned rows are protected)
+                case 51 where !self.clipboardManager.isSearchFocused:  // ⌫ — delete the highlighted row (pinned rows are protected)
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.deleteItem(item) }
                     return nil
                 case 16:  // Y — toggle the full-content preview overlay
-                    self.clipboardManager.isPreviewing.toggle()
+                    self.clipboardManager.togglePreview()
                     return nil
                 default:
                     return event
@@ -270,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return event
             case 49 where !self.clipboardManager.isSearchFocused:            // space — toggle preview
-                self.clipboardManager.isPreviewing.toggle()
+                self.clipboardManager.togglePreview()
                 return nil
             case 44 where !self.clipboardManager.isSearchFocused:            // "/" — focus search
                 NotificationCenter.default.post(name: .focusSearchRequested, object: nil)
@@ -293,24 +299,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if capturedIsTerminal {
             switch item.type {
             case .file, .folder:
-                clipboardManager.pasteText((item.filePaths ?? []).map(Self.shellEscape).joined(separator: " "))
+                guard clipboardManager.pasteText((item.filePaths ?? []).map(Self.shellEscape).joined(separator: " ")) else { return }
                 finishPaste()
                 return
             case .image:
-                clipboardManager.pasteItem(item)
-                closeWindow()
+                if clipboardManager.pasteItem(item) { closeWindow() }
                 return
             case .text, .code:
                 break
             }
         }
-        clipboardManager.pasteItem(item)   // writes the right type back + guards re-capture
+        guard clipboardManager.pasteItem(item) else { return }
         finishPaste()
     }
 
     /// Paste a single member of an expanded multi-file group.
     private func commitPath(_ path: String) {
-        clipboardManager.pasteSubPath(path)
+        let written = capturedIsTerminal
+            ? clipboardManager.pasteText(Self.shellEscape(path))
+            : clipboardManager.pasteSubPath(path)
+        guard written else { return }
         finishPaste()
     }
 
@@ -323,7 +331,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Panel is non-activating, so the target is usually still frontmost.
             // Skip the activate() overhead and paste directly — 0.04s vs 0.24s.
             if target.isActive {
-                AutoPaste.instantPaste()
+                AutoPaste.instantPaste(into: target)
             } else {
                 AutoPaste.paste(into: target)
             }
@@ -336,19 +344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return ClipboardItemRow.isTerminalApp(name)
     }
 
-    /// Escape a path for shell pasting. Backslash-escapes only what the shell
-    /// treats specially (spaces, quotes, globs, etc). No wrapping quotes —
-    /// the path lands in the terminal exactly as it appears on disk.
+    /// Escape a path for shell pasting using one single-quoted shell word.
     /// ponytail: internal for testing — no production callers outside AppDelegate.
     static func shellEscape(_ path: String) -> String {
-        if path.isEmpty { return "" }
-        let shellSpecial = Set("\\'\"`$!#*?|[](){}<>~;& \t\n")
-        var out = ""
-        for ch in path {
-            if shellSpecial.contains(ch) { out.append("\\") }
-            out.append(ch)
-        }
-        return out
+        guard !path.isEmpty else { return "''" }
+        return "'\(path.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -358,4 +358,3 @@ final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
-

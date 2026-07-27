@@ -15,24 +15,33 @@ enum AutoPaste {
     }
 
     /// Bring `app` forward, then paste the current clipboard into it.
-    static func paste(into app: NSRunningApplication?) {
-        guard let app else { return }
-        if #available(macOS 14.0, *) {
-            app.activate(from: NSRunningApplication.current, options: [])
-        } else {
-            app.activate()
-        }
-        // Small grace period for the target to become frontmost before ⌘V.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
-            postCommandV()
-        }
+    static func paste(into app: NSRunningApplication) {
+        guard !app.isTerminated else { return }
+        app.activate(from: NSRunningApplication.current, options: [])
+        pasteWhenFrontmost(app, attemptsRemaining: 4)
     }
 
     /// Paste immediately when the target is already frontmost (panel is
     /// non-activating, so the target retains focus in the common case).
-    static func instantPaste() {
+    static func instantPaste(into app: NSRunningApplication) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+            guard isFrontmost(app) else { return }
             postCommandV()
+        }
+    }
+
+    private static func isFrontmost(_ app: NSRunningApplication) -> Bool {
+        !app.isTerminated && NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+    }
+
+    private static func pasteWhenFrontmost(_ app: NSRunningApplication, attemptsRemaining: Int) {
+        guard !app.isTerminated else { return }
+        if isFrontmost(app) {
+            postCommandV()
+        } else if attemptsRemaining > 0 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                pasteWhenFrontmost(app, attemptsRemaining: attemptsRemaining - 1)
+            }
         }
     }
 
@@ -44,17 +53,17 @@ enum AutoPaste {
         // carry .maskCommand, and cmdUp clears it. Terminal rejects a synthetic ⌘V whose
         // Command key-down lacks the flag (system beep, no paste) even though most apps
         // tolerate it; clearing on cmdUp also prevents a dangling modifier (the "+" cursor).
-        let cmdDown = CGEvent(keyboardEventSource: src, virtualKey: cmd, keyDown: true)
-        let vDown = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: true)
-        let vUp = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: false)
-        let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: cmd, keyDown: false)
-        cmdDown?.flags = .maskCommand
-        vDown?.flags = .maskCommand
-        vUp?.flags = .maskCommand
-        cmdUp?.flags = []
-        cmdDown?.post(tap: .cghidEventTap)
-        vDown?.post(tap: .cghidEventTap)
-        vUp?.post(tap: .cghidEventTap)
-        cmdUp?.post(tap: .cghidEventTap)
+        guard let cmdDown = CGEvent(keyboardEventSource: src, virtualKey: cmd, keyDown: true),
+              let vDown = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: true),
+              let vUp = CGEvent(keyboardEventSource: src, virtualKey: v, keyDown: false),
+              let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: cmd, keyDown: false) else { return }
+        cmdDown.flags = .maskCommand
+        vDown.flags = .maskCommand
+        vUp.flags = .maskCommand
+        cmdUp.flags = []
+        cmdDown.post(tap: .cghidEventTap)
+        vDown.post(tap: .cghidEventTap)
+        vUp.post(tap: .cghidEventTap)
+        cmdUp.post(tap: .cghidEventTap)
     }
 }

@@ -13,7 +13,7 @@ struct HistoryView: View {
     var isLaunchAtLogin: () -> Bool = { false }
     var onEnableAccessibility: () -> Void = {}
     var isTrusted: () -> Bool = { false }
-    var onHotKeyChanged: () -> Void = {}
+    var onHotKeyChanged: (HotKeyPreset) -> Bool = { _ in false }
     var onQuit: () -> Void = {}
     // Same UserDefaults key AppDelegate reads for the auto-paste gate; @AppStorage keeps
     // the menu checkmark live.
@@ -66,6 +66,7 @@ struct HistoryView: View {
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                .accessibilityLabel("\(manager.filteredItems.count) history items")
             gearMenu
         }
         .padding(.horizontal, 12)
@@ -91,7 +92,7 @@ struct HistoryView: View {
                 ForEach(HotKeyPreset.all) { preset in
                     Toggle(preset.label, isOn: Binding(
                         get: { hotKeyPresetID == preset.id },
-                        set: { _ in hotKeyPresetID = preset.id; onHotKeyChanged() }
+                        set: { _ in if onHotKeyChanged(preset) { hotKeyPresetID = preset.id } }
                     ))
                 }
             }
@@ -100,6 +101,7 @@ struct HistoryView: View {
         } label: {
             Image(systemName: "gearshape")
                 .foregroundColor(.secondary)
+                .accessibilityLabel("Settings")
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -115,6 +117,7 @@ struct HistoryView: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($searchFocused)
+                .accessibilityLabel("Search history")
             if !manager.searchText.isEmpty {
                 Button { manager.searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -143,6 +146,11 @@ struct HistoryView: View {
                 Text(manager.searchText.isEmpty ? "No items yet" : "No matches")
                     .font(.caption)
                     .foregroundColor(.secondary)
+                if manager.searchText.isEmpty {
+                    Text("Copy something to get started")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
                 Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -158,6 +166,7 @@ struct HistoryView: View {
                                 item: item,
                                 isSelected: manager.selectedItemID == item.id,
                                 shortcutIndex: index < 9 ? index + 1 : nil,
+                                onSelect: { manager.selectedItemID = item.id },
                                 onPaste: { onCommit(item) },
                                 onPastePath: { path in onCommitPath(path) }
                             )
@@ -187,6 +196,7 @@ struct HistoryView: View {
             Text(title)
                 .font(.system(size: 10, weight: .semibold))
                 .foregroundColor(.secondary)
+                .accessibilityAddTraits(.isHeader)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -204,7 +214,7 @@ struct HistoryView: View {
             Button {
                 manager.clearAll()
             } label: {
-                Label("clear all", systemImage: "trash")
+                Label("clear recent", systemImage: "trash")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }

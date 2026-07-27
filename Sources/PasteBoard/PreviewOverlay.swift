@@ -27,9 +27,13 @@ struct PreviewOverlay: View {
             Text("Preview")
                 .font(.system(size: 12, weight: .medium))
             Spacer()
-            Text("esc / ⌘Y")
-                .font(.system(size: 10))
-                .foregroundColor(.secondary)
+            Button(action: onClose) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .help("Close preview")
+            .accessibilityLabel("Close preview")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -53,6 +57,7 @@ struct PreviewOverlay: View {
 private struct ImagePreview: View {
     let path: String?
     @State private var image: NSImage?
+    @State private var finishedLoading = false
 
     // Maximum edge length for the preview — prevents a 50MB screenshot from
     // filling memory. 800px is plenty for a panel-sized preview.
@@ -62,15 +67,20 @@ private struct ImagePreview: View {
         Group {
             if let image {
                 Image(nsImage: image).resizable().scaledToFit().padding(12)
+            } else if finishedLoading {
+                ContentUnavailableView("Image unavailable", systemImage: "photo.badge.exclamationmark")
             } else {
                 ProgressView()
             }
         }
         .task(id: path) {
-            guard let path else { return }
+            finishedLoading = false
+            guard let path else { finishedLoading = true; return }
+            let maxPreviewPixels = Self.maxPreviewPixels
             image = await Task.detached(priority: .userInitiated) {
-                downsampleImage(path: path, maxPixelSize: Self.maxPreviewPixels)
+                downsampleImage(path: path, maxPixelSize: maxPreviewPixels)
             }.value
+            finishedLoading = true
         }
     }
 }

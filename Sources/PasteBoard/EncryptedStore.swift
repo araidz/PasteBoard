@@ -47,8 +47,8 @@ enum EncryptedStore {
             return SymmetricKey(data: data)
         } catch let EncryptedStoreError.keychainReadFailed(status) where status == errSecItemNotFound {
             let key = SymmetricKey(size: .bits256)
-            try writeKeychain(key.withUnsafeBytes { Data($0) })
-            return key
+            let stored = try writeKeychain(key.withUnsafeBytes { Data($0) })
+            return SymmetricKey(data: stored)
         }
     }
 
@@ -71,23 +71,20 @@ enum EncryptedStore {
         return data
     }
 
-    private static func writeKeychain(_ data: Data) throws {
+    private static func writeKeychain(_ data: Data) throws -> Data {
         var q = query()
         q[kSecValueData as String] = data
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(q as CFDictionary, nil)
         if status == errSecDuplicateItem {
-            // Key exists from a previous install — update in place rather than
-            // creating a new key (which would strand the encrypted history).
-            let update: [String: Any] = [kSecValueData as String: data]
-            let updateStatus = SecItemUpdate(query() as CFDictionary, update as CFDictionary)
-            guard updateStatus == errSecSuccess else {
-                throw EncryptedStoreError.keychainWriteFailed(updateStatus)
-            }
+            // Another process won first-run creation. Its key may already encrypt
+            // history, so use it rather than replacing it.
+            return try readKeychain()
         } else {
             guard status == errSecSuccess else {
                 throw EncryptedStoreError.keychainWriteFailed(status)
             }
         }
+        return data
     }
 }

@@ -1,6 +1,6 @@
 # PasteBoard
 
-A lightweight clipboard history manager for macOS that lives in your menu bar. Copy anything — text, code, images, files, or folders — press **⌃⌘V**, and paste it straight back into whatever app you're in.
+A lightweight clipboard history manager for macOS that lives in your menu bar. Copy text, code, images, files, or folders, press **⌃⌘V**, and paste it straight back into whatever app you're in.
 
 ## Features
 
@@ -10,7 +10,7 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 - 📋 **History** for text, code, images, and files/folders
 - 🔍 **Search** — press **/** to focus it, then type
 - 📌 **Pin** the items you reuse so they stay at the top
-- 🔒 **Encrypted at rest** — history is AES-GCM encrypted with a key held in your login Keychain
+- 🔒 **Encrypted history** — text, paths, and metadata use AES-GCM with a key held in your login Keychain; captured images are currently stored locally as PNG files
 - 🖼️ **Image thumbnails** generated efficiently in the background
 - 🚀 **Launch at login** (optional)
 - 🪶 Native, lightweight menu bar app — no Electron, no clutter
