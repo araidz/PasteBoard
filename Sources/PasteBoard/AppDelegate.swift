@@ -43,10 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        statusItem.button?.image = NSImage(
-            systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard",
-            accessibilityDescription: "PasteBoard"
-        )
+        updateStatusIcon()
 
         // Clicking the menu-bar icon toggles the panel; all settings live in the
         // in-panel gear menu.
@@ -100,11 +97,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // Briefly flash the icon to the filled clipboard as a capture confirmation, then back.
     @objc private func flashIcon() {
-        statusItem.button?.image = NSImage(systemSymbolName: isTestBuild ? "doc.on.clipboard" : "clipboard.fill", accessibilityDescription: "Captured")
+        guard clipboardManager.isCaptureEnabled else { updateStatusIcon(); return }
+        updateStatusIcon(captured: true)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self else { return }
-            self.statusItem.button?.image = NSImage(systemSymbolName: self.isTestBuild ? "doc.on.clipboard" : "clipboard", accessibilityDescription: "PasteBoard")
+            self?.updateStatusIcon()
         }
+    }
+
+    private func updateStatusIcon(captured: Bool = false) {
+        let disabled = !clipboardManager.isCaptureEnabled
+        let symbol = disabled ? "exclamationmark.triangle.fill" : (captured ? (isTestBuild ? "doc.on.clipboard" : "clipboard.fill") : (isTestBuild ? "doc.on.clipboard" : "clipboard"))
+        let description = disabled ? "PasteBoard capture disabled" : (captured ? "Captured" : "PasteBoard")
+        statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
+        statusItem.button?.toolTip = disabled ? "PasteBoard capture disabled: history unavailable" : "PasteBoard"
     }
 
     // Place the panel just below the mouse cursor, clamped to the active screen.
@@ -230,7 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clipboardManager.isPreviewing = false
         if lastOpenFromIcon { positionUnderIcon(w) } else { positionNearCursor(w) }
         w.makeKeyAndOrderFront(nil)
-        // Focus the search field once the panel is key (next runloop).
+        // Reset search focus once the panel is key (next runloop).
         DispatchQueue.main.async { NotificationCenter.default.post(name: .panelDidShow, object: nil) }
     }
 

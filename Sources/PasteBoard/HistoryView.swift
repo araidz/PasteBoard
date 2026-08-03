@@ -20,7 +20,7 @@ struct HistoryView: View {
     @AppStorage("autoPasteEnabled") private var autoPasteEnabled = true
     // Selected global-hotkey preset id; AppDelegate re-registers via onHotKeyChanged.
     @AppStorage("hotKeyPresetID") private var hotKeyPresetID = "ctrl-cmd-v"
-    @FocusState private var searchFocused: Bool
+    @State private var searchFocused = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,6 +53,7 @@ struct HistoryView: View {
         .onChange(of: searchFocused) { _, focused in
             manager.isSearchFocused = focused
         }
+        .onDisappear { manager.isSearchFocused = false }
     }
 
     private var header: some View {
@@ -76,6 +77,10 @@ struct HistoryView: View {
 
     private var gearMenu: some View {
         Menu {
+            if !manager.isCaptureEnabled {
+                Text("⚠ Capture disabled — history unavailable")
+                Divider()
+            }
             Toggle("Launch at Login", isOn: Binding(get: isLaunchAtLogin, set: { _ in onToggleLaunchAtLogin() }))
             Toggle("Paste Directly Into App", isOn: $autoPasteEnabled)
             // Only offer the enable action while it's still needed; once granted, the row goes away.
@@ -113,11 +118,8 @@ struct HistoryView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
                 .font(.caption)
-            TextField("/ to search…", text: $manager.searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 12))
-                .focused($searchFocused)
-                .accessibilityLabel("Search history")
+            SearchField(text: $manager.searchText, isFocused: $searchFocused)
+                .frame(height: 16)
             if !manager.searchText.isEmpty {
                 Button { manager.searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -140,13 +142,17 @@ struct HistoryView: View {
         if manager.filteredItems.isEmpty {
             VStack(spacing: 6) {
                 Spacer()
-                Image(systemName: manager.searchText.isEmpty ? "clipboard" : "magnifyingglass")
+                Image(systemName: !manager.isCaptureEnabled ? "exclamationmark.triangle" : (manager.searchText.isEmpty ? "clipboard" : "magnifyingglass"))
                     .font(.system(size: 28))
                     .foregroundColor(.secondary)
-                Text(manager.searchText.isEmpty ? "No items yet" : "No matches")
+                Text(!manager.isCaptureEnabled ? "History unavailable" : (manager.searchText.isEmpty ? "No items yet" : "No matches"))
                     .font(.caption)
                     .foregroundColor(.secondary)
-                if manager.searchText.isEmpty {
+                if !manager.isCaptureEnabled {
+                    Text("Capture is disabled")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else if manager.searchText.isEmpty {
                     Text("Copy something to get started")
                         .font(.caption2)
                         .foregroundColor(.secondary)

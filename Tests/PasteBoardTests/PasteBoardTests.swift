@@ -1,6 +1,8 @@
 import XCTest
 @testable import PasteBoard
 import CryptoKit
+import ImageIO
+import UniformTypeIdentifiers
 
 final class PasteBoardTests: XCTestCase {
 
@@ -296,6 +298,68 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertTrue(manager.items.isEmpty)
         XCTAssertEqual(try Data(contentsOf: history), original)
         XCTAssertTrue(FileManager.default.fileExists(atPath: image.path))
+        XCTAssertFalse(manager.isCaptureEnabled)
+    }
+
+    func testExistingButUnreadableHistoryDisablesCapture() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let history = dir.appendingPathComponent("history.json")
+        try FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
+
+        let manager = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+
+        XCTAssertFalse(manager.isCaptureEnabled)
+        var isDirectory: ObjCBool = false
+        XCTAssertTrue(FileManager.default.fileExists(atPath: history.path, isDirectory: &isDirectory))
+        XCTAssertTrue(isDirectory.boolValue)
+    }
+
+    func testInvalidMaxItemsIsClamped() {
+        let defaults = isolatedDefaults()
+        defaults.set(-100, forKey: "maxItems")
+        let manager = ClipboardManager(
+            baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+            defaults: defaults,
+            keyProvider: { Self.ephemeralKey }
+        )
+        XCTAssertEqual(manager.maxItems, 1)
+        manager.maxItems = .max
+        XCTAssertEqual(manager.maxItems, 1_000)
+    }
+
+    func testImageDecodedPixelLimit() throws {
+        XCTAssertTrue(ClipboardManager.imageDimensionsAreSafe(width: 8_000, height: 5_000))
+        XCTAssertFalse(ClipboardManager.imageDimensionsAreSafe(width: 8_001, height: 5_000))
+        XCTAssertFalse(ClipboardManager.imageDimensionsAreSafe(width: .max, height: 2))
+        XCTAssertFalse(ClipboardManager.imageDimensionsAreSafe(width: 0, height: 100))
+
+        func image(width: Int, height: Int) throws -> CGImage {
+            let context = try XCTUnwrap(CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(),
+                bitmapInfo: CGImageAlphaInfo.none.rawValue
+            ))
+            return try XCTUnwrap(context.makeImage())
+        }
+
+        let singleFrameData = NSMutableData()
+        let singleFrameDestination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            singleFrameData, UTType.tiff.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(singleFrameDestination, try image(width: 16, height: 16), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(singleFrameDestination))
+        XCTAssertTrue(ClipboardManager.imageDimensionsAreSafe(singleFrameData as Data))
+
+        XCTAssertTrue(ClipboardManager.imageDimensionsAreSafe(width: 5_000, height: 5_000))
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(
+            data, UTType.tiff.identifier as CFString, 2, nil
+        ))
+        CGImageDestinationAddImage(destination, try image(width: 5_000, height: 5_000), nil)
+        CGImageDestinationAddImage(destination, try image(width: 5_000, height: 5_000), nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        XCTAssertEqual(CGImageSourceGetCount(try XCTUnwrap(CGImageSourceCreateWithData(data, nil))), 2)
+        XCTAssertFalse(ClipboardManager.imageDimensionsAreSafe(data as Data))
     }
 
     // 16. Image items dedup by file path.

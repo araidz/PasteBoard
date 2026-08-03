@@ -1,5 +1,6 @@
 import Cocoa
 import CryptoKit
+import ImageIO
 import SwiftUI
 
 // App-internal notifications: a capture happened (menu-bar icon flash), the
@@ -108,17 +109,22 @@ class ClipboardManager: ObservableObject {
     // Whether the full-content preview overlay is showing (space / ⌘Y). Tracks
     // selectedItemID live, so arrow keys keep updating it while it's open.
     @Published var isPreviewing: Bool = false
-    // Mirrors the search TextField's @FocusState (set from HistoryView) so the
+    // Mirrors the search field's focus state (set from HistoryView) so the
     // key monitor knows whether space/"/" should act as shortcuts or as text.
     @Published var isSearchFocused: Bool = false
+    var isCaptureEnabled: Bool { historyKey != nil }
 
     private var lastChangeCount: Int = 0
     // Rolling-window size for unpinned items, user-adjustable from the menu and
     // persisted across launches. Changing it re-trims immediately.
-    @Published var maxItems: Int {
-        didSet {
-            guard maxItems != oldValue else { return }
-            defaults.set(maxItems, forKey: "maxItems")
+    @Published private var storedMaxItems: Int
+    var maxItems: Int {
+        get { storedMaxItems }
+        set {
+            let value = Self.validatedMaxItems(newValue)
+            guard value != storedMaxItems else { return }
+            storedMaxItems = value
+            defaults.set(value, forKey: "maxItems")
             trimUnpinned()
             saveItems()
         }
@@ -192,10 +198,13 @@ class ClipboardManager: ObservableObject {
     init(
         baseDirectory: URL? = nil,
         defaults: UserDefaults = .standard,
-        keyProvider: () throws -> SymmetricKey = EncryptedStore.persistentKey
+        keyProvider: () throws -> SymmetricKey = {
+            try EncryptedStore.persistentKey(service: Bundle.main.bundleIdentifier == "com.local.pasteboard.test"
+                ? "com.local.pasteboard.test.historykey" : "com.local.pasteboard.historykey")
+        }
     ) {
         self.defaults = defaults
-        maxItems = (defaults.object(forKey: "maxItems") as? Int) ?? 200
+        storedMaxItems = Self.validatedMaxItems((defaults.object(forKey: "maxItems") as? Int) ?? 200)
         maxItemSizeBytes = (defaults.object(forKey: "maxItemSizeBytes") as? Int) ?? 10_000_000
 
         let appDir: URL
@@ -206,7 +215,9 @@ class ClipboardManager: ObservableObject {
                 ?? FileManager.default.temporaryDirectory
             // App-support dir for history + images. The shared bundle id keeps the
             // Accessibility grant across updates.
-            appDir = appSupport.appendingPathComponent("PasteBoard")
+            appDir = appSupport.appendingPathComponent(
+                Bundle.main.bundleIdentifier == "com.local.pasteboard.test" ? "PasteBoard-Test" : "PasteBoard"
+            )
         }
         imageStorageURL = appDir.appendingPathComponent("Images")
         storageURL = appDir.appendingPathComponent("history.json")
@@ -278,8 +289,10 @@ class ClipboardManager: ObservableObject {
         if pasteboard.types?.contains(.tiff) == true || pasteboard.types?.contains(.png) == true {
             let maxSize = maxItemSizeBytes
             guard let imageData = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return }
+            guard imageData.count <= maxSize else { return }
             ioQueue.async { [weak self] in
                 guard let self else { return }
+                guard Self.imageDimensionsAreSafe(imageData) else { return }
                 guard let image = NSImage(data: imageData) else { return }
                 let imageID = UUID().uuidString
                 let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
@@ -331,6 +344,31 @@ class ClipboardManager: ObservableObject {
     }
 
     // MARK: - Classification (pure, internal so tests can exercise them)
+
+    private static let maxImageDecodedPixelCount = 40_000_000
+
+    static func imageDimensionsAreSafe(width: Int, height: Int) -> Bool {
+        width > 0 && height > 0 && width <= maxImageDecodedPixelCount / height
+    }
+
+    static func imageDimensionsAreSafe(_ data: Data) -> Bool {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+        let count = CGImageSourceGetCount(source)
+        guard count > 0 else { return false }
+        var totalPixels = 0
+        for index in 0..<count {
+            guard let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [CFString: Any],
+                  let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+                  let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+                  imageDimensionsAreSafe(width: width, height: height) else { return false }
+            let pixels = width * height
+            guard pixels <= maxImageDecodedPixelCount - totalPixels else { return false }
+            totalPixels += pixels
+        }
+        return true
+    }
+
+    static func validatedMaxItems(_ value: Int) -> Int { min(max(value, 1), 1_000) }
 
     /// Classify copied file URLs: a copy made entirely of directories is a folder.
     static func fileType(forPaths paths: [String]) -> ClipboardItemType {
@@ -426,8 +464,9 @@ class ClipboardManager: ObservableObject {
     /// Enforce the 200-item window over unpinned items, leaving pinned ones untouched.
     private func trimUnpinned() {
         let (_, unpinned) = partitioned()
-        guard unpinned.count > maxItems else { return }
-        let overflow = unpinned.suffix(unpinned.count - maxItems) // oldest unpinned
+        let keep = Self.validatedMaxItems(maxItems)
+        guard unpinned.count > keep else { return }
+        let overflow = unpinned.suffix(from: keep) // oldest unpinned
         let removeIDs = Set(overflow.map { $0.id })
         removeFiles(overflow.compactMap { $0.imagePath })
         items.removeAll { removeIDs.contains($0.id) }
@@ -619,26 +658,19 @@ class ClipboardManager: ObservableObject {
     }
 
     private func loadItems() -> Bool {
-        var pinned: [ClipboardItem] = []
-        var unpinned: [ClipboardItem] = []
-        var loadedSuccessfully = true
-        if let data = try? Data(contentsOf: pinnedStorageURL) {
-            if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
-                pinned = saved.map { var i = $0; i.pinned = true; return i }
-            } else {
-                loadedSuccessfully = false
-                NSLog("PasteBoard: pinned history could not be authenticated or decoded; leaving it untouched")
+        func load(_ url: URL, name: String, pinned: Bool) -> [ClipboardItem]? {
+            guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+            do {
+                return try decodeHistory([ClipboardItem].self, from: Data(contentsOf: url)).map {
+                    var item = $0; item.pinned = pinned; return item
+                }
+            } catch {
+                NSLog("PasteBoard: \(name) unavailable; capture disabled — \(error.localizedDescription)")
+                return nil
             }
         }
-        if let data = try? Data(contentsOf: storageURL) {
-            if let saved = try? decodeHistory([ClipboardItem].self, from: data) {
-                unpinned = saved.map { var i = $0; i.pinned = false; return i }
-            } else {
-                loadedSuccessfully = false
-                NSLog("PasteBoard: history could not be authenticated or decoded; leaving it untouched")
-            }
-        }
-        guard loadedSuccessfully else { return false }
+        guard let pinned = load(pinnedStorageURL, name: "pinned history", pinned: true),
+              let unpinned = load(storageURL, name: "history", pinned: false) else { return false }
         // Keep a single recency-ordered array; `orderedItems` floats pins to the top.
         items = (pinned + unpinned).sorted { $0.timestamp > $1.timestamp }
         return true

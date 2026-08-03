@@ -2,12 +2,12 @@
 #
 # Build a distributable PasteBoard.app + PasteBoard.dmg in one shot.
 #
-#   ./build-release.sh [--test] [version] [build]
+#   ./build-release.sh [--test] <version> <build>
 #
 # --test    Build a test version with a green icon and separate bundle ID
 #           so it can coexist with the stable build.
-# Defaults to 2.0 (build 6). The result is a release build, stripped of debug
-# symbols, ad-hoc signed (this is a free app with no paid Apple cert), and packaged
+# The result is a release build, stripped of debug symbols, ad-hoc signed (this is
+# a free app with no paid Apple cert), and packaged
 # into a compressed read-only DMG named after the app. Output lands in dist/, which
 # is gitignored — the .app and .dmg are distributed via GitHub Releases, not committed.
 set -euo pipefail
@@ -21,8 +21,14 @@ fi
 
 APP_NAME="PasteBoard"
 BUNDLE_ID="com.local.pasteboard"
-VERSION="${1:-2.0}"
-BUILD="${2:-6}"
+if [[ $# -ne 2 || -z "$1" || -z "$2" ]]; then
+  echo "Usage: $0 [--test] <version> <build>" >&2
+  exit 2
+fi
+VERSION="$1"
+BUILD="$2"
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "Version must be X.Y or X.Y.Z" >&2; exit 2; }
+[[ "$BUILD" =~ ^[1-9][0-9]*$ ]] || { echo "Build must be a positive integer" >&2; exit 2; }
 
 if $TEST_MODE; then
   APP_NAME="PasteBoard-Test"
@@ -108,10 +114,11 @@ codesign --verify --deep --strict "$APP"
 
 echo "▸ Building ${DMG}…"
 STAGE="$(mktemp -d)"
-cp -R "$APP" "$STAGE/PasteBoard.app"
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$APP" "$STAGE/$APP_NAME.app"
+ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
-rm -rf "$STAGE"
 
 echo "✓ Done — v$VERSION (build $BUILD) $([ "$TEST_MODE" = true ] && echo '[TEST]')"
 echo "  app: $APP  ($(du -h "$APP/Contents/MacOS/PasteBoard" | cut -f1) binary)"

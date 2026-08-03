@@ -34,25 +34,25 @@ enum EncryptedStore {
 
     // MARK: - Keychain-backed key
 
-    private static let service = "com.local.pasteboard.historykey"
+    private static let defaultService = "com.local.pasteboard.historykey"
     private static let account = "history"
 
     /// The persistent history key: loads it from Keychain, or generates and
     /// stores a new one on first run. Only creates a new key when the keychain
     /// genuinely has no entry (errSecItemNotFound) — transient read failures
     /// propagate instead of silently overwriting the existing key.
-    static func persistentKey() throws -> SymmetricKey {
+    static func persistentKey(service: String = defaultService) throws -> SymmetricKey {
         do {
-            let data = try readKeychain()
+            let data = try readKeychain(service: service)
             return SymmetricKey(data: data)
         } catch let EncryptedStoreError.keychainReadFailed(status) where status == errSecItemNotFound {
             let key = SymmetricKey(size: .bits256)
-            let stored = try writeKeychain(key.withUnsafeBytes { Data($0) })
+            let stored = try writeKeychain(key.withUnsafeBytes { Data($0) }, service: service)
             return SymmetricKey(data: stored)
         }
     }
 
-    private static func query() -> [String: Any] {
+    private static func query(service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -60,8 +60,8 @@ enum EncryptedStore {
         ]
     }
 
-    private static func readKeychain() throws -> Data {
-        var q = query()
+    private static func readKeychain(service: String) throws -> Data {
+        var q = query(service: service)
         q[kSecReturnData as String] = true
         var result: AnyObject?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
@@ -71,15 +71,15 @@ enum EncryptedStore {
         return data
     }
 
-    private static func writeKeychain(_ data: Data) throws -> Data {
-        var q = query()
+    private static func writeKeychain(_ data: Data, service: String) throws -> Data {
+        var q = query(service: service)
         q[kSecValueData as String] = data
         q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let status = SecItemAdd(q as CFDictionary, nil)
         if status == errSecDuplicateItem {
             // Another process won first-run creation. Its key may already encrypt
             // history, so use it rather than replacing it.
-            return try readKeychain()
+            return try readKeychain(service: service)
         } else {
             guard status == errSecSuccess else {
                 throw EncryptedStoreError.keychainWriteFailed(status)

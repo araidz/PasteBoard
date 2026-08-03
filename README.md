@@ -10,7 +10,7 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 - 📋 **History** for text, code, images, and files/folders
 - 🔍 **Search** — press **/** to focus it, then type
 - 📌 **Pin** the items you reuse so they stay at the top
-- 🔒 **Encrypted history** — text, paths, and metadata use AES-GCM with a key held in your login Keychain; captured images are currently stored locally as PNG files
+- 🔒 **Encrypted history metadata** — text, paths, and metadata use AES-GCM with a key held in your login Keychain; persisted image PNG files are stored locally and are not encrypted
 - 🖼️ **Image thumbnails** generated efficiently in the background
 - 🚀 **Launch at login** (optional)
 - 🪶 Native, lightweight menu bar app — no Electron, no clutter
@@ -57,10 +57,14 @@ git clone https://github.com/araidz/PasteBoard.git
 cd PasteBoard
 swift build -c release      # or: open Package.swift in Xcode
 swift test                  # run the tests
-./build-release.sh          # package an .app + .dmg into dist/
+./build-release.sh VERSION BUILD  # package an explicit version/build into dist/
 ```
 
 `build-release.sh` ad-hoc signs by default. Run `./make-signing-cert.sh` once to sign with a stable self-signed certificate, so the Accessibility grant persists across updates.
+
+## Release
+
+From a clean `main` that exactly matches `origin/main`, run `./release.sh VERSION BUILD` (for example, `./release.sh 2.7 13`). The script tests, builds, verifies, tags, and publishes the DMG; push the release commit first.
 
 ## License
 
