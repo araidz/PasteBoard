@@ -28,8 +28,8 @@ remote_tag_commit() {
   [ -z "${fallback:-}" ] || echo "$fallback"
 }
 release_id() {
-  gh api --paginate 'repos/{owner}/{repo}/releases?per_page=100' --slurp \
-    --jq "[add[] | select(.tag_name == \"$tag\")][0].id // empty"
+  gh api --paginate 'repos/{owner}/{repo}/releases?per_page=100' \
+    --jq ".[] | select(.tag_name == \"$tag\") | .id"
 }
 
 cd -- "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
