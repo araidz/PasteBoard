@@ -27,40 +27,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     let filePaths: [String]?
     let timestamp: Date
     let sourceApp: String?
-    var pinned: Bool
-
-    init(
-        id: UUID,
-        type: ClipboardItemType,
-        textContent: String?,
-        imagePath: String?,
-        filePaths: [String]?,
-        timestamp: Date,
-        sourceApp: String?,
-        pinned: Bool = false
-    ) {
-        self.id = id
-        self.type = type
-        self.textContent = textContent
-        self.imagePath = imagePath
-        self.filePaths = filePaths
-        self.timestamp = timestamp
-        self.sourceApp = sourceApp
-        self.pinned = pinned
-    }
-
-    // Custom decoding so histories written before `pinned` existed still load.
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        type = try c.decode(ClipboardItemType.self, forKey: .type)
-        textContent = try c.decodeIfPresent(String.self, forKey: .textContent)
-        imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
-        filePaths = try c.decodeIfPresent([String].self, forKey: .filePaths)
-        timestamp = try c.decode(Date.self, forKey: .timestamp)
-        sourceApp = try c.decodeIfPresent(String.self, forKey: .sourceApp)
-        pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
-    }
+    var pinned: Bool = false
 
     var displayText: String {
         switch type {
@@ -88,6 +55,22 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     /// A copy containing more than one file/folder path — rendered as an
     /// expandable group whose members can be pasted individually.
     var isGroup: Bool { (filePaths?.count ?? 0) > 1 }
+}
+
+// Custom decoding so histories written before `pinned` existed still load.
+// Lives in an extension so the memberwise init stays compiler-synthesized.
+extension ClipboardItem {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        type = try c.decode(ClipboardItemType.self, forKey: .type)
+        textContent = try c.decodeIfPresent(String.self, forKey: .textContent)
+        imagePath = try c.decodeIfPresent(String.self, forKey: .imagePath)
+        filePaths = try c.decodeIfPresent([String].self, forKey: .filePaths)
+        timestamp = try c.decode(Date.self, forKey: .timestamp)
+        sourceApp = try c.decodeIfPresent(String.self, forKey: .sourceApp)
+        pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+    }
 }
 
 class ClipboardManager: ObservableObject {
@@ -498,14 +481,12 @@ class ClipboardManager: ObservableObject {
         return true
     }
 
-    /// Paste a single member of a multi-file group (one file URL).
+    /// Paste a single member of a multi-file group (one file URL) — rides
+    /// `pasteItem`'s file branch (existence check, write, re-capture guard).
     @discardableResult
     func pasteSubPath(_ path: String, to pasteboard: NSPasteboard = .general) -> Bool {
-        guard FileManager.default.fileExists(atPath: path) else { return false }
-        pasteboard.clearContents()
-        guard pasteboard.writeObjects([URL(fileURLWithPath: path) as NSURL]) else { return false }
-        if pasteboard == .general { lastChangeCount = pasteboard.changeCount }
-        return true
+        pasteItem(ClipboardItem(id: UUID(), type: .file, textContent: nil, imagePath: nil,
+                                filePaths: [path], timestamp: Date(), sourceApp: nil), to: pasteboard)
     }
 
     /// Put plain text on the clipboard — used to paste a file's path into a terminal,
@@ -611,27 +592,28 @@ class ClipboardManager: ObservableObject {
 
     // MARK: - Persistence
 
+    /// Encode + encrypt + write both files. Runs on ioQueue; strong `self` is
+    /// deliberate so an in-flight write completes even during teardown.
+    private func writeAll(pinned: [ClipboardItem], unpinned: [ClipboardItem], key: SymmetricKey) {
+        do {
+            try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: key)
+                .write(to: storageURL, options: .atomic)
+            try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: key)
+                .write(to: pinnedStorageURL, options: .atomic)
+        } catch {
+            NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
+        }
+    }
+
     private func saveItems() {
         guard let historyKey else { return }
         // Snapshot on the main thread, then encode + write off the main thread.
         // A burst of mutations (rapid pin toggles, a flurry of captures) collapses
         // into a single write via the debounced work item.
         let (pinned, unpinned) = partitioned()
-        let storageURL = self.storageURL
-        let pinnedStorageURL = self.pinnedStorageURL
+        let work = DispatchWorkItem { self.writeAll(pinned: pinned, unpinned: unpinned, key: historyKey) }
         // Manage pendingSave entirely on ioQueue to avoid cross-thread races.
-        let work = DispatchWorkItem {
-            do {
-                let unpinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
-                let pinnedData = try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: historyKey)
-                try unpinnedData.write(to: storageURL, options: .atomic)
-                try pinnedData.write(to: pinnedStorageURL, options: .atomic)
-            } catch {
-                NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
-            }
-        }
-        ioQueue.async { [weak self] in
-            guard let self else { return }
+        ioQueue.async {
             self.pendingSave?.cancel()
             self.pendingSave = work
             self.ioQueue.asyncAfter(deadline: .now() + Self.saveDebounce, execute: work)
@@ -641,19 +623,10 @@ class ClipboardManager: ObservableObject {
     func flush() {
         guard let historyKey else { return }
         let (pinned, unpinned) = partitioned()
-        let storageURL = self.storageURL
-        let pinnedStorageURL = self.pinnedStorageURL
         ioQueue.sync {
             pendingSave?.cancel()
             pendingSave = nil
-            do {
-                try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: historyKey)
-                    .write(to: storageURL, options: .atomic)
-                try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: historyKey)
-                    .write(to: pinnedStorageURL, options: .atomic)
-            } catch {
-                NSLog("PasteBoard: failed to flush history — \(error.localizedDescription)")
-            }
+            writeAll(pinned: pinned, unpinned: unpinned, key: historyKey)
         }
     }
 

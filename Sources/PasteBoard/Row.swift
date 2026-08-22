@@ -45,7 +45,7 @@ enum ThumbnailCache {
             return
         }
         queue.async {
-            let image = downsample(path: path)
+            let image = downsampleImage(path: path, maxPixelSize: maxPixelSize)
             if let image {
                 let rep = image.representations.first
                 let cost = (rep?.pixelsWide ?? maxPixelSize) * (rep?.pixelsHigh ?? maxPixelSize) * 4
@@ -53,10 +53,6 @@ enum ThumbnailCache {
             }
             DispatchQueue.main.async { completion(image) }
         }
-    }
-
-    private static func downsample(path: String) -> NSImage? {
-        downsampleImage(path: path, maxPixelSize: maxPixelSize)
     }
 }
 
@@ -90,119 +86,28 @@ private struct ThumbnailView: View {
     }
 }
 
-// Memoizes the icon for an extension — the lookup (especially the UTType
-// fallback) is pure in `ext`, and extensions repeat heavily across a history.
-// Scoped inside ThumbnailCache for bounded size via NSCache.
-extension ThumbnailCache {
-    private static let fileIconCache: NSCache<NSString, NSString> = {
-        let c = NSCache<NSString, NSString>()
-        c.countLimit = 200
-        return c
-    }()
-
-    static func cachedFileIconName(forPath path: String?) -> String {
-        let ext = (path.map { ($0 as NSString).pathExtension.lowercased() }) ?? ""
-        if let cached = fileIconCache.object(forKey: ext as NSString) { return cached as String }
-        let name = resolveFileIconName(forExtension: ext)
-        fileIconCache.setObject(name as NSString, forKey: ext as NSString)
-        return name
-    }
-}
-
 /// SF Symbol for a file, chosen by its extension. Shared by single rows and
-/// the members of an expanded multi-file group. Generously categorized.
+/// the members of an expanded multi-file group. A small override map covers
+/// types the UTType hierarchy can't classify; everything else resolves via
+/// `systemTypeIconName`.
 func fileIconName(forPath path: String?) -> String {
-    ThumbnailCache.cachedFileIconName(forPath: path)
+    let ext = (path.map { ($0 as NSString).pathExtension.lowercased() }) ?? ""
+    return fileIconOverrides[ext] ?? systemTypeIconName(forExtension: ext)
 }
 
-/// Uncached resolution of an extension to an SF Symbol name.
-// ponytail: explicit switch avoids UTType lookup per row — remove if UTType perf improves
-private func resolveFileIconName(forExtension ext: String) -> String {
-    switch ext {
-    // Archives / packages
-    case "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "pkg", "xip", "deb", "rpm", "cab", "lz", "zst":
-        return "archivebox"
-    // Disk images / volumes
-    case "dmg", "iso", "img", "sparseimage", "sparsebundle", "vmdk", "vdi", "toast":
-        return "opticaldiscdrive"
-    // Raster images / camera raw
-    case "png", "jpg", "jpeg", "gif", "heic", "heif", "tiff", "tif", "bmp", "webp", "ico",
-         "raw", "cr2", "cr3", "nef", "dng", "arw", "orf", "rw2":
-        return "photo"
-    // Vector / design source
-    case "svg", "psd", "ai", "sketch", "fig", "xcf", "afdesign", "afphoto", "indd", "eps", "cdr":
-        return "paintpalette"
-    // PDF
-    case "pdf":
-        return "doc.richtext"
-    // Word-processing / rich documents
-    case "doc", "docx", "pages", "rtf", "rtfd", "odt", "wpd":
-        return "doc.text"
-    // Plain text / markdown / notes
-    case "txt", "text", "md", "markdown", "rst", "adoc", "org", "tex":
-        return "doc.plaintext"
-    // Logs
-    case "log":
-        return "list.bullet.rectangle"
-    // Spreadsheets
-    case "xls", "xlsx", "numbers", "csv", "tsv", "ods":
-        return "tablecells"
-    // Presentations
-    case "ppt", "pptx", "key", "odp":
-        return "rectangle.on.rectangle.angled"
-    // Audio
-    case "mp3", "wav", "aac", "flac", "m4a", "aiff", "aif", "ogg", "opus", "wma", "mid", "midi", "alac":
-        return "music.note"
-    // Video
-    case "mp4", "mov", "avi", "mkv", "m4v", "webm", "wmv", "flv", "mpg", "mpeg", "3gp", "vob":
-        return "film"
-    // Shell scripts / terminal
-    case "sh", "bash", "zsh", "fish", "command", "ps1", "bat", "cmd", "zshrc", "bashrc":
-        return "terminal"
-    // Source code
-    case "swift", "c", "cpp", "cc", "cxx", "h", "hpp", "m", "mm", "java", "kt", "kts",
-         "js", "jsx", "ts", "tsx", "py", "rb", "go", "rs", "php", "cs",
-         "html", "htm", "css", "scss", "sass", "less",
-         "pl", "lua", "sql", "r", "dart", "scala", "vue", "svelte", "ex", "exs",
-         "clj", "hs", "erl", "groovy", "gradle", "ipynb":
-        return "chevron.left.forwardslash.chevron.right"
-    // Structured data / config
-    case "json", "xml", "yaml", "yml", "toml", "plist", "ini", "conf", "cfg", "env", "properties":
-        return "curlybraces"
-    // Databases
-    case "db", "sqlite", "sqlite3", "sql3", "mdb", "accdb", "realm":
-        return "cylinder"
-    // Fonts
-    case "ttf", "otf", "woff", "woff2", "ttc", "eot":
-        return "textformat"
-    // Ebooks / comics
-    case "epub", "mobi", "azw", "azw3", "fb2", "cbz", "cbr":
-        return "book"
-    // 3D models / CAD
-    case "obj", "stl", "fbx", "gltf", "glb", "usdz", "usd", "blend", "dae", "3ds", "step", "stp":
-        return "cube"
-    // Certificates / keys
-    case "pem", "crt", "cer", "der", "p12", "pfx", "pub", "gpg", "asc":
-        return "key"
-    // Apps / executables / installers
-    case "app", "exe", "appimage", "msi", "apk", "jar", "bin", "run":
-        return "app"
-    // Calendar
-    case "ics", "ical":
-        return "calendar"
-    // Contacts
-    case "vcf", "vcard":
-        return "person.crop.square"
-    // Torrents
-    case "torrent":
-        return "arrow.down.circle"
-    default:
-        break
-    }
-    // Anything not curated above: resolve via the system's Uniform Type hierarchy so
-    // even uncommon extensions map to a sensible category icon, not a generic document.
-    return systemTypeIconName(forExtension: ext)
-}
+// ponytail: only extensions UTType misses — re-curate if icon fidelity complaints come in
+private let fileIconOverrides: [String: String] = {
+    var map = ["log": "list.bullet.rectangle", "torrent": "arrow.down.circle"]
+    for ext in ["epub", "mobi", "azw", "azw3", "fb2", "cbz", "cbr"] { map[ext] = "book" }
+    for ext in ["pem", "crt", "cer", "der", "p12", "pfx", "pub", "gpg", "asc"] { map[ext] = "key" }
+    for ext in ["db", "sqlite", "sqlite3", "sql3", "mdb", "accdb", "realm"] { map[ext] = "cylinder" }
+    for ext in ["obj", "stl", "fbx", "gltf", "glb", "blend", "dae", "3ds", "step", "stp"] { map[ext] = "cube" }
+    for ext in ["svg", "psd", "ai", "sketch", "fig", "xcf", "afdesign", "afphoto", "indd", "eps", "cdr"] { map[ext] = "paintpalette" }
+    for ext in ["toml", "ini", "conf", "cfg", "env", "properties"] { map[ext] = "curlybraces" }
+    for ext in ["ps1", "bat", "cmd"] { map[ext] = "terminal" }
+    for ext in ["img", "sparseimage", "sparsebundle", "vmdk", "vdi", "toast"] { map[ext] = "opticaldiscdrive" }
+    return map
+}()
 
 /// Maps a file extension to a category icon using `UTType` conformance, so the
 /// app covers essentially every registered file type. Falls back to a generic

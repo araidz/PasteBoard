@@ -8,13 +8,13 @@ import AppKit
 struct HistoryView: View {
     @ObservedObject var manager: ClipboardManager
     let onCommit: (ClipboardItem) -> Void
-    var onCommitPath: (String) -> Void = { _ in }
-    var onToggleLaunchAtLogin: () -> Void = {}
-    var isLaunchAtLogin: () -> Bool = { false }
-    var onEnableAccessibility: () -> Void = {}
-    var isTrusted: () -> Bool = { false }
-    var onHotKeyChanged: (HotKeyPreset) -> Bool = { _ in false }
-    var onQuit: () -> Void = {}
+    let onCommitPath: (String) -> Void
+    let onToggleLaunchAtLogin: () -> Void
+    let isLaunchAtLogin: () -> Bool
+    let onEnableAccessibility: () -> Void
+    let isTrusted: () -> Bool
+    let onHotKeyChanged: (HotKeyPreset) -> Bool
+    let onQuit: () -> Void
     // Same UserDefaults key AppDelegate reads for the auto-paste gate; @AppStorage keeps
     // the menu checkmark live.
     @AppStorage("autoPasteEnabled") private var autoPasteEnabled = true
@@ -220,9 +220,7 @@ struct HistoryView: View {
             Button {
                 manager.clearAll()
             } label: {
-                Label("clear recent", systemImage: "trash")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary)
+                footerHint(symbol: "trash", "clear")
             }
             .buttonStyle(.plain)
             .help("Clear unpinned history")
