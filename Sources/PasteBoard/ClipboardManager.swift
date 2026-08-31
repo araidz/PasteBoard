@@ -112,9 +112,11 @@ class ClipboardManager: ObservableObject {
             saveItems()
         }
     }
+    private static let searchHaystackCap = 16_384
     // Maximum size in bytes for a single clipboard item. Items exceeding this
     // are silently skipped to prevent memory/disk bloat from huge images.
-    @Published var maxItemSizeBytes: Int {
+    // Defaults-tunable only (no UI) — plain var, nothing observes it.
+    var maxItemSizeBytes: Int {
         didSet {
             guard maxItemSizeBytes != oldValue else { return }
             defaults.set(maxItemSizeBytes, forKey: "maxItemSizeBytes")
@@ -167,7 +169,9 @@ class ClipboardManager: ObservableObject {
             result = base
         } else {
             result = base.filter { item in
-                item.displayText.localizedCaseInsensitiveContains(searchText)
+                // ponytail: cap the haystack so a multi-MB text item can't stall
+                // typing — raise searchHaystackCap if deep-content search matters.
+                item.displayText.prefix(Self.searchHaystackCap).localizedCaseInsensitiveContains(searchText)
                     || item.sourceApp?.localizedCaseInsensitiveContains(searchText) == true
                     || item.filePaths?.contains(where: { $0.localizedCaseInsensitiveContains(searchText) }) == true
                     || item.type.rawValue.localizedCaseInsensitiveContains(searchText)
@@ -271,24 +275,36 @@ class ClipboardManager: ObservableObject {
         // decoding NSImage on the main thread when there's no image.
         if pasteboard.types?.contains(.tiff) == true || pasteboard.types?.contains(.png) == true {
             let maxSize = maxItemSizeBytes
-            guard let imageData = pasteboard.data(forType: .png) ?? pasteboard.data(forType: .tiff) else { return }
+            let pngSource = pasteboard.data(forType: .png)
+            guard let imageData = pngSource ?? pasteboard.data(forType: .tiff) else { return }
             guard imageData.count <= maxSize else { return }
             ioQueue.async { [weak self] in
                 guard let self else { return }
                 guard Self.imageDimensionsAreSafe(imageData) else { return }
-                guard let image = NSImage(data: imageData) else { return }
-                let imageID = UUID().uuidString
-                let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
-                guard let tiffData = image.tiffRepresentation,
-                      let bitmap = NSBitmapImageRep(data: tiffData),
-                      let pngData = bitmap.representation(using: .png, properties: [:]) else { return }
+                // ponytail: PNG passes through untouched; only TIFF-only sources
+                // re-encode (via NSBitmapImageRep directly — no NSImage roundtrip).
+                let pngData: Data
+                if pngSource != nil {
+                    pngData = imageData
+                } else {
+                    guard let bitmap = NSBitmapImageRep(data: imageData),
+                          let converted = bitmap.representation(using: .png, properties: [:]) else { return }
+                    pngData = converted
+                }
                 // Skip oversized images to prevent memory/disk bloat.
                 guard pngData.count <= maxSize else { return }
-                do {
-                    try pngData.write(to: imagePath)
-                } catch {
-                    NSLog("PasteBoard: failed to write captured image — \(error.localizedDescription)")
-                    return
+                // Content-addressed filename: identical image bytes map to the same
+                // path, so the path-based dedup in insert() collapses repeat copies
+                // (and the file write below becomes a no-op).
+                let imageID = SHA256.hash(data: pngData).map { String(format: "%02x", $0) }.joined()
+                let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
+                if !FileManager.default.fileExists(atPath: imagePath.path) {
+                    do {
+                        try pngData.write(to: imagePath)
+                    } catch {
+                        NSLog("PasteBoard: failed to write captured image — \(error.localizedDescription)")
+                        return
+                    }
                 }
                 let item = ClipboardItem(
                     id: UUID(),
@@ -653,8 +669,10 @@ class ClipboardManager: ObservableObject {
     /// histories written before encryption existed still load. The next save
     /// re-persists the file encrypted.
     private func decodeHistory<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
-        if let legacy = try? JSONDecoder().decode(type, from: data) { return legacy }
         guard let historyKey else { throw EncryptedStoreError.encryptionFailed }
-        return try JSONDecoder().decode(type, from: EncryptedStore.decrypt(data, key: historyKey))
+        if let decrypted = try? EncryptedStore.decrypt(data, key: historyKey) {
+            return try JSONDecoder().decode(type, from: decrypted)
+        }
+        return try JSONDecoder().decode(type, from: data)   // legacy plain JSON
     }
 }

@@ -21,6 +21,8 @@ struct HistoryView: View {
     // Selected global-hotkey preset id; AppDelegate re-registers via onHotKeyChanged.
     @AppStorage("hotKeyPresetID") private var hotKeyPresetID = "ctrl-cmd-v"
     @State private var searchFocused = false
+    // Two-click guard on the footer trash: first click arms ("sure?"), second clears.
+    @State private var confirmClear = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -46,6 +48,7 @@ struct HistoryView: View {
         .transaction { $0.disablesAnimations = true }
         .onReceive(NotificationCenter.default.publisher(for: .panelDidShow)) { _ in
             searchFocused = false   // never auto-focus; "/" opts in explicitly
+            confirmClear = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .focusSearchRequested)) { _ in
             searchFocused = true
@@ -177,6 +180,20 @@ struct HistoryView: View {
                                 onPastePath: { path in onCommitPath(path) }
                             )
                             .id(item.id)
+                            // Right-click: mouse-discoverable versions of the keyboard actions.
+                            .contextMenu {
+                                Button("Paste") { onCommit(item) }
+                                Button("Copy") { manager.pasteItem(item) }
+                                Button(item.pinned ? "Unpin" : "Pin") { manager.togglePin(item) }
+                                Button("Preview") {
+                                    manager.selectedItemID = item.id
+                                    manager.isPreviewing = true
+                                }
+                                if !item.pinned {
+                                    Divider()
+                                    Button("Delete", role: .destructive) { manager.deleteItem(item) }
+                                }
+                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -218,9 +235,17 @@ struct HistoryView: View {
             footerHint(keys: "⌘⌫", "delete")
             Spacer()
             Button {
-                manager.clearAll()
+                if confirmClear {
+                    manager.clearAll()
+                    confirmClear = false
+                } else {
+                    confirmClear = true
+                    // Disarm after a beat so a stale "sure?" can't linger.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) { confirmClear = false }
+                }
             } label: {
-                footerHint(symbol: "trash", "clear")
+                footerHint(symbol: "trash", confirmClear ? "sure?" : "clear",
+                           color: confirmClear ? .red : nil)
             }
             .buttonStyle(.plain)
             .help("Clear unpinned history")
@@ -229,11 +254,13 @@ struct HistoryView: View {
         .padding(.vertical, 8)
     }
 
-    private func footerHint(symbol: String? = nil, keys: String? = nil, _ label: String) -> some View {
+    // `color: nil` keeps the default look (primary icon, secondary label).
+    private func footerHint(symbol: String? = nil, keys: String? = nil, _ label: String,
+                            color: Color? = nil) -> some View {
         HStack(spacing: 3) {
-            if let symbol { Image(systemName: symbol).font(.system(size: 10)) }
+            if let symbol { Image(systemName: symbol).font(.system(size: 10)).foregroundColor(color) }
             if let keys { Text(keys).font(.system(size: 11, weight: .medium)) }
-            Text(label).font(.system(size: 11)).foregroundColor(.secondary)
+            Text(label).font(.system(size: 11)).foregroundColor(color ?? .secondary)
         }
     }
 }

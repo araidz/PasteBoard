@@ -93,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             self?.clipboardManager.checkForChanges()
         }
+        pollTimer?.tolerance = 0.1   // let the OS coalesce wakeups (battery)
     }
 
     // Briefly flash the icon to the filled clipboard as a capture confirmation, then back.
@@ -169,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // macOS 26+.
         let w = FloatingPanel(
             contentRect: NSRect(x: 0, y: 0, width: 290, height: 520),
-            styleMask: [.borderless, .resizable, .nonactivatingPanel],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
@@ -179,11 +180,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         w.isReleasedWhenClosed = false
         w.isOpaque = false
         w.backgroundColor = .clear
-        // Lock the panel to a fixed size so it always opens at 290×520, whether the
-        // history list is empty or full.
-        w.contentMinSize = NSSize(width: 290, height: 520)
-        w.contentMaxSize = NSSize(width: 290, height: 520)
-
         let hosting = NSHostingView(
             rootView: HistoryView(
                 manager: clipboardManager,
@@ -267,6 +263,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case 16:  // Y — toggle the full-content preview overlay
                     self.clipboardManager.togglePreview()
                     return nil
+                case 3:   // F — focus search (alias for "/")
+                    NotificationCenter.default.post(name: .focusSearchRequested, object: nil)
+                    return nil
+                case 12:  // Q — quit (no main menu, so ⌘Q needs explicit handling)
+                    NSApp.terminate(nil)
+                    return nil
                 default:
                     return event
                 }
@@ -287,7 +289,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NotificationCenter.default.post(name: .focusSearchRequested, object: nil)
                 return nil
             case 53:                                                           // esc
+                // Peel back one layer at a time: preview → search filter → panel.
                 if self.clipboardManager.isPreviewing { self.clipboardManager.isPreviewing = false }
+                else if !self.clipboardManager.searchText.isEmpty { self.clipboardManager.searchText = "" }
                 else { self.closeWindow() }
                 return nil
             default: return event

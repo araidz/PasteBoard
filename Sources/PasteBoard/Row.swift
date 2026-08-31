@@ -390,23 +390,26 @@ struct ClipboardItemRow: View {
             .padding(.horizontal, 6)
     }
 
-    @ViewBuilder
     private var metadataLine: some View {
-        if item.pinned || item.sourceApp != nil {
-            HStack(spacing: 4) {
-                if item.pinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 9))
-                        .foregroundColor(isSelected ? .white : .orange)
-                }
-                if let app = item.sourceApp {
-                    Text(app)
-                        .font(.system(size: 10))
-                        .foregroundColor(secondaryColor)
-                        .lineLimit(1)
-                }
+        HStack(spacing: 4) {
+            if item.pinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9))
+                    .foregroundColor(isSelected ? .white : .orange)
             }
+            Text(metadataText)
+                .font(.system(size: 10))
+                .foregroundColor(secondaryColor)
+                .lineLimit(1)
         }
+    }
+
+    // "Safari · 2 minutes ago" — static text is fine; the panel is transient,
+    // so each open re-renders fresh relative times.
+    private var metadataText: String {
+        let time = item.timestamp.formatted(.relative(presentation: .named))
+        if let app = item.sourceApp { return "\(app) · \(time)" }
+        return time
     }
 
     /// SF Symbol representing the kind of entry (text, code, image, or file by type).
