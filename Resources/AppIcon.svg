@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5a97ff"/><stop offset="1" stop-color="#1e46c8"/></linearGradient>
+<linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".25"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e3ecff"/></linearGradient>
+</defs>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+<rect x="100" y="100" width="824" height="824" rx="185" fill="url(#sheen)"/>
+<rect x="101.5" y="101.5" width="821" height="821" rx="184" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="3"/>
+<g transform="rotate(-16 512 780)"><rect x="312" y="250" width="400" height="500" rx="62" fill="#fff" opacity=".28"/></g>
+<g transform="rotate(-7 512 780)"><rect x="312" y="250" width="400" height="500" rx="62" fill="#fff" opacity=".5"/></g>
+<rect x="320" y="274" width="400" height="500" rx="62" fill="#0a1f66" opacity=".22"/>
+<rect x="312" y="256" width="400" height="500" rx="62" fill="url(#card)"/>
+<rect x="372" y="340" width="220" height="34" rx="17" fill="#2a5be0"/>
+<rect x="372" y="412" width="280" height="26" rx="13" fill="#2a5be0" opacity=".35"/>
+<rect x="372" y="462" width="250" height="26" rx="13" fill="#2a5be0" opacity=".35"/>
+<rect x="372" y="512" width="180" height="26" rx="13" fill="#2a5be0" opacity=".35"/>
+<rect x="540" y="600" width="124" height="96" rx="30" fill="#2a5be0"/>
+<text x="602" y="666" font-family="SF Pro Rounded, SF Pro Display, Helvetica Neue" font-weight="700" font-size="52" fill="#fff" text-anchor="middle">⌘V</text>
+</svg>

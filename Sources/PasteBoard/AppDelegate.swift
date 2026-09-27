@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusIcon(captured: Bool = false) {
         let disabled = !clipboardManager.isCaptureEnabled
-        let symbol = disabled ? "exclamationmark.triangle.fill" : (captured ? (isTestBuild ? "doc.on.clipboard" : "clipboard.fill") : (isTestBuild ? "doc.on.clipboard" : "clipboard"))
+        let symbol = disabled ? "exclamationmark.triangle.fill" : (captured ? (isTestBuild ? "doc.on.clipboard" : "list.clipboard.fill") : (isTestBuild ? "doc.on.clipboard" : "list.clipboard"))
         let description = disabled ? "PasteBoard capture disabled" : (captured ? "Captured" : "PasteBoard")
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
         statusItem.button?.toolTip = disabled ? "PasteBoard capture disabled: history unavailable" : "PasteBoard"
