@@ -13,7 +13,6 @@ struct HotKeyPreset: Identifiable {
     static let all: [HotKeyPreset] = [
         HotKeyPreset(id: "ctrl-cmd-v",     label: "⌃⌘V",  keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(controlKey | cmdKey)),
         HotKeyPreset(id: "ctrl-opt-v",     label: "⌃⌥V",  keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(controlKey | optionKey)),
-        HotKeyPreset(id: "ctrl-opt-cmd-v", label: "⌃⌥⌘V", keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(controlKey | optionKey | cmdKey)),
         HotKeyPreset(id: "shift-cmd-v",    label: "⇧⌘V",  keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(shiftKey | cmdKey)),
         HotKeyPreset(id: "opt-cmd-v",      label: "⌥⌘V",  keyCode: UInt32(kVK_ANSI_V), modifiers: UInt32(optionKey | cmdKey)),
     ]

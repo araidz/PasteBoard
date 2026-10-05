@@ -31,6 +31,10 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     var pinned: Bool = false
     // Text recognized in an image by Vision, filled in shortly after capture.
     var ocrText: String? = nil
+    // Formatted form of a text copy (RTF, else HTML) and its pasteboard type,
+    // written alongside the plain string on paste unless pasting as plain text.
+    var richData: Data? = nil
+    var richType: String? = nil
 
     var displayText: String {
         switch type {
@@ -74,6 +78,8 @@ extension ClipboardItem {
         sourceApp = try c.decodeIfPresent(String.self, forKey: .sourceApp)
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
         ocrText = try c.decodeIfPresent(String.self, forKey: .ocrText)
+        richData = try c.decodeIfPresent(Data.self, forKey: .richData)
+        richType = try c.decodeIfPresent(String.self, forKey: .richType)
     }
 }
 
@@ -339,11 +345,15 @@ class ClipboardManager: ObservableObject {
         // just a pasteboard pointer), then do classification + size check off-main.
         if let text = pasteboard.string(forType: .string), !text.isEmpty {
             let maxSize = maxItemSizeBytes
+            let richType = [NSPasteboard.PasteboardType.rtf, .html].first { pasteboard.types?.contains($0) == true }
+            // ponytail: formatting over 256 KB (pasted web pages, embedded images) is
+            // dropped and the copy stays plain — raise maxRichBytes if that bites.
+            let richData = richType.flatMap { pasteboard.data(forType: $0) }.flatMap { $0.count <= Self.maxRichBytes ? $0 : nil }
             ioQueue.async { [weak self] in
                 guard let self else { return }
                 // Skip oversized text to prevent memory bloat.
                 guard text.utf8.count <= maxSize else { return }
-                let item = ClipboardItem(
+                var item = ClipboardItem(
                     id: UUID(),
                     type: Self.looksLikeCode(text) ? .code : .text,
                     textContent: text,
@@ -352,6 +362,10 @@ class ClipboardManager: ObservableObject {
                     timestamp: Date(),
                     sourceApp: sourceApp
                 )
+                if let richData, let richType {
+                    item.richData = richData
+                    item.richType = richType.rawValue
+                }
                 self.addItem(item)
             }
         }
@@ -360,6 +374,7 @@ class ClipboardManager: ObservableObject {
     // MARK: - Classification (pure, internal so tests can exercise them)
 
     private static let maxImageDecodedPixelCount = 40_000_000
+    static let maxRichBytes = 256 * 1024
 
     static func imageDimensionsAreSafe(width: Int, height: Int) -> Bool {
         width > 0 && height > 0 && width <= maxImageDecodedPixelCount / height
@@ -463,7 +478,7 @@ class ClipboardManager: ObservableObject {
     /// the clipboard on focus would otherwise flash the icon and rewrite history.
     @discardableResult
     func insert(_ item: ClipboardItem) -> Bool {
-        if let top = items.first, isContentDuplicate(top, item) { return false }
+        if let top = items.first, isContentDuplicate(top, item), top.richData == item.richData { return false }
         var newItem = item
         // If the same content already exists, drop the older copy and keep the
         // newest one at the top — carrying any pin forward so it isn't lost.
@@ -513,12 +528,15 @@ class ClipboardManager: ObservableObject {
     }
 
     @discardableResult
-    func pasteItem(_ item: ClipboardItem, to pasteboard: NSPasteboard = .general) -> Bool {
+    func pasteItem(_ item: ClipboardItem, to pasteboard: NSPasteboard = .general, plain: Bool = false) -> Bool {
         let written: Bool
         switch item.type {
         case .text, .code:
             guard let text = item.textContent else { return false }
             pasteboard.clearContents()
+            if !plain, let rich = item.richData, let type = item.richType {
+                pasteboard.setData(rich, forType: .init(type))
+            }
             written = pasteboard.setString(text, forType: .string)
         case .image:
             guard let path = item.imagePath, let image = NSImage(contentsOfFile: path) else { return false }

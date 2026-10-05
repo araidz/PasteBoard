@@ -8,6 +8,7 @@ import AppKit
 struct HistoryView: View {
     @ObservedObject var manager: ClipboardManager
     let onCommit: (ClipboardItem) -> Void
+    let onCommitPlain: (ClipboardItem) -> Void
     let onCommitPath: (String) -> Void
     let onToggleLaunchAtLogin: () -> Void
     let isLaunchAtLogin: () -> Bool
@@ -185,6 +186,9 @@ struct HistoryView: View {
                             // Right-click: mouse-discoverable versions of the keyboard actions.
                             .contextMenu {
                                 Button("Paste") { onCommit(item) }
+                                if item.richData != nil {
+                                    Button("Paste as Plain Text  ⌃⌥⌘V") { onCommitPlain(item) }
+                                }
                                 Button("Copy") { manager.pasteItem(item) }
                                 if let ocr = item.ocrText {
                                     Button("Copy Text from Image") { manager.pasteText(ocr) }

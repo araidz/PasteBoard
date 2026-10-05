@@ -10,6 +10,10 @@ A lightweight clipboard history manager for macOS that lives in your menu bar. C
 - 📋 **History** for text, code, images, and files/folders
 - 🔍 **Search** — press **/** to focus it, then type
 - 📌 **Pin** the items you reuse so they stay at the top
+- ↩️ **⌘Z undo** for the last delete while the panel is open
+- 🅰️ **Formatting kept** — rich text pastes with its formatting; **⌃⌥⌘V** pastes plain text
+- 🔤 **Text in images** — copied images are OCR'd on-device, so screenshots are searchable and their text copyable
+- 🙈 **Ignore Next Copy** — gear menu one-shot to keep a sensitive copy out of history
 - 🔒 **Encrypted history metadata** — text, paths, and metadata use AES-GCM with a key held in your login Keychain; persisted image PNG files are stored locally and are not encrypted
 - 🖼️ **Image thumbnails** generated efficiently in the background
 - 🚀 **Launch at login** (optional)

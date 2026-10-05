@@ -397,6 +397,13 @@ struct ClipboardItemRow: View {
                     .font(.system(size: 9))
                     .foregroundColor(isSelected ? .white : .orange)
             }
+            if item.richData != nil {
+                Image(systemName: "textformat")
+                    .font(.system(size: 9))
+                    .foregroundColor(secondaryColor)
+                    .accessibilityLabel("Formatted")
+                    .help("Pastes with formatting — ⌃⌥⌘V for plain text")
+            }
             Text(metadataText)
                 .font(.system(size: 10))
                 .foregroundColor(secondaryColor)

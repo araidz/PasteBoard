@@ -380,6 +380,39 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(m.items.first?.id, b.id)
     }
 
+    // Formatted copies paste with their RTF; plain paste drops it; both survive a reload.
+    func testRichTextPasteAndPersistence() throws {
+        let rtf = Data(#"{\rtf1\ansi {\b bold}}"#.utf8)
+        var item = textItem("bold")
+        item.richData = rtf
+        item.richType = NSPasteboard.PasteboardType.rtf.rawValue
+
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let m = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+        let pasteboard = NSPasteboard(name: .init("PasteBoardTests.\(UUID().uuidString)"))
+
+        XCTAssertTrue(m.pasteItem(item, to: pasteboard))
+        XCTAssertEqual(pasteboard.data(forType: .rtf), rtf)
+        XCTAssertEqual(pasteboard.string(forType: .string), "bold")
+
+        XCTAssertTrue(m.pasteItem(item, to: pasteboard, plain: true))
+        XCTAssertNil(pasteboard.data(forType: .rtf))
+        XCTAssertEqual(pasteboard.string(forType: .string), "bold")
+
+        m.insert(item)
+        m.flush()
+        let reloaded = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+        XCTAssertEqual(reloaded.items.first?.richData, rtf)
+
+        // Same text but newly formatted is not treated as a re-asserted copy.
+        XCTAssertTrue(m.insert(textItem("plain-first")))
+        var formatted = textItem("plain-first")
+        formatted.richData = rtf
+        formatted.richType = item.richType
+        XCTAssertTrue(m.insert(formatted))
+        XCTAssertEqual(m.items.first?.richData, rtf)
+    }
+
     // Vision reads text from a rendered image, and that text becomes searchable.
     func testOCRTextIsRecognizedAndSearchable() throws {
         let image = NSImage(size: NSSize(width: 600, height: 120), flipped: false) { rect in

@@ -192,6 +192,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: HistoryView(
                 manager: clipboardManager,
                 onCommit: { [weak self] item in self?.commit(item) },
+                onCommitPlain: { [weak self] item in self?.commit(item, plain: true) },
                 onCommitPath: { [weak self] path in self?.commitPath(path) },
                 onToggleLaunchAtLogin: { [weak self] in self?.toggleLaunchAtLogin() },
                 isLaunchAtLogin: { [weak self] in self?.isLaunchAtLogin ?? false },
@@ -263,6 +264,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 }
                 switch event.keyCode {
+                case 9 where event.modifierFlags.contains([.control, .option]):  // ⌃⌥⌘V — paste without formatting
+                    if let item = self.clipboardManager.selectedItem ?? list.first { self.commit(item, plain: true) }
+                    return nil
                 case 35 where !self.clipboardManager.isSearchFocused:  // P — pin/unpin the highlighted row
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.togglePin(item) }
                     return nil
@@ -313,7 +317,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Commit + auto-paste
 
-    private func commit(_ item: ClipboardItem) {
+    private func commit(_ item: ClipboardItem, plain: Bool = false) {
         // Terminals can't accept a file-url or image via synthetic ⌘V (it beeps). For
         // files/folders, paste the shell-escaped path(s) as text — same result as
         // dragging the file in. Image data has no text form → copy-only (no ⌘V).
@@ -330,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 break
             }
         }
-        guard clipboardManager.pasteItem(item) else { return }
+        guard clipboardManager.pasteItem(item, plain: plain) else { return }
         finishPaste()
     }
 
