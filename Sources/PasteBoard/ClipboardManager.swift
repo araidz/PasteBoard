@@ -415,7 +415,7 @@ class ClipboardManager: ObservableObject {
 
     private func addItem(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            self.insert(item)
+            guard self.insert(item) else { return }
             // NOTE: reconstructed — fires the blink in AppDelegate on capture.
             NotificationCenter.default.post(name: .clipboardDidCapture, object: nil)
         }
@@ -423,7 +423,11 @@ class ClipboardManager: ObservableObject {
 
     /// Synchronous insertion core: de-duplicates, then enforces the window.
     /// Internal so the test target can drive history without the pasteboard.
-    func insert(_ item: ClipboardItem) {
+    /// Returns false when the item repeats the newest entry — apps that re-assert
+    /// the clipboard on focus would otherwise flash the icon and rewrite history.
+    @discardableResult
+    func insert(_ item: ClipboardItem) -> Bool {
+        if let top = items.first, isContentDuplicate(top, item) { return false }
         var newItem = item
         // If the same content already exists, drop the older copy and keep the
         // newest one at the top — carrying any pin forward so it isn't lost.
@@ -435,6 +439,7 @@ class ClipboardManager: ObservableObject {
         items.insert(newItem, at: 0)
         trimUnpinned()
         saveItems()
+        return true
     }
 
     private func isContentDuplicate(_ a: ClipboardItem, _ b: ClipboardItem) -> Bool {

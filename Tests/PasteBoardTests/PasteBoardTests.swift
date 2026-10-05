@@ -372,11 +372,21 @@ final class PasteBoardTests: XCTestCase {
         let b = ClipboardItem(id: UUID(), type: .image, textContent: nil,
                               imagePath: imgPath, filePaths: nil,
                               timestamp: Date(), sourceApp: nil)
-        m.items = [a]
+        let newer = textItem("newer")
+        m.items = [newer, a]
         m.insert(b)
-        // b should replace a (same path = same image).
-        XCTAssertEqual(m.items.count, 1)
+        // b should replace a (same path = same image) and move to the top.
+        XCTAssertEqual(m.items.count, 2)
         XCTAssertEqual(m.items.first?.id, b.id)
+    }
+
+    // A copy repeating the newest entry (apps re-asserting the clipboard) is a no-op.
+    func testReassertedTopCopyIsSkipped() {
+        let m = makeManager()
+        let first = textItem("same")
+        XCTAssertTrue(m.insert(first))
+        XCTAssertFalse(m.insert(textItem("same")))
+        XCTAssertEqual(m.items.map(\.id), [first.id])
     }
 
     // 17. maxItemSizeBytes defaults to 10MB.
