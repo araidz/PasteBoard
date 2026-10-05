@@ -186,6 +186,9 @@ struct HistoryView: View {
                             .contextMenu {
                                 Button("Paste") { onCommit(item) }
                                 Button("Copy") { manager.pasteItem(item) }
+                                if let ocr = item.ocrText {
+                                    Button("Copy Text from Image") { manager.pasteText(ocr) }
+                                }
                                 Button(item.pinned ? "Unpin" : "Pin") { manager.togglePin(item) }
                                 Button("Preview") {
                                     manager.selectedItemID = item.id

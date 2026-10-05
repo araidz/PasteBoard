@@ -2,6 +2,7 @@ import Cocoa
 import CryptoKit
 import ImageIO
 import SwiftUI
+import Vision
 
 // App-internal notifications: a capture happened (menu-bar icon flash), the
 // panel became visible, and the user pressed "/" to focus the search field.
@@ -28,6 +29,8 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     let timestamp: Date
     let sourceApp: String?
     var pinned: Bool = false
+    // Text recognized in an image by Vision, filled in shortly after capture.
+    var ocrText: String? = nil
 
     var displayText: String {
         switch type {
@@ -70,6 +73,7 @@ extension ClipboardItem {
         timestamp = try c.decode(Date.self, forKey: .timestamp)
         sourceApp = try c.decodeIfPresent(String.self, forKey: .sourceApp)
         pinned = try c.decodeIfPresent(Bool.self, forKey: .pinned) ?? false
+        ocrText = try c.decodeIfPresent(String.self, forKey: .ocrText)
     }
 }
 
@@ -180,6 +184,7 @@ class ClipboardManager: ObservableObject {
                     || item.sourceApp?.localizedCaseInsensitiveContains(searchText) == true
                     || item.filePaths?.contains(where: { $0.localizedCaseInsensitiveContains(searchText) }) == true
                     || item.type.rawValue.localizedCaseInsensitiveContains(searchText)
+                    || item.ocrText?.prefix(Self.searchHaystackCap).localizedCaseInsensitiveContains(searchText) == true
             }
         }
         cachedFiltered = result
@@ -321,6 +326,11 @@ class ClipboardManager: ObservableObject {
                     sourceApp: sourceApp
                 )
                 self.addItem(item)
+                // OCR on its own queue so a slow recognition never delays history writes.
+                DispatchQueue.global(qos: .utility).async {
+                    guard let text = Self.recognizeText(in: pngData) else { return }
+                    DispatchQueue.main.async { self.setOCRText(text, for: item.id) }
+                }
             }
             return
         }
@@ -373,6 +383,27 @@ class ClipboardManager: ObservableObject {
     }
 
     static func validatedMaxItems(_ value: Int) -> Int { min(max(value, 1), 1_000) }
+
+    /// On-device text recognition (Vision); nil when the image has no readable text.
+    static func recognizeText(in imageData: Data) -> String? {
+        guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        try? VNImageRequestHandler(cgImage: image).perform([request])
+        let lines = request.results?.compactMap { $0.topCandidates(1).first?.string } ?? []
+        let text = lines.joined(separator: "\n")
+        return text.isEmpty ? nil : text
+    }
+
+    /// Attach OCR text to an item, if it is still in history (it may have been
+    /// deleted, trimmed, or replaced by a duplicate while recognition ran).
+    func setOCRText(_ text: String, for id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+        items[index].ocrText = text
+        saveItems()
+    }
 
     /// Classify copied file URLs: a copy made entirely of directories is a folder.
     static func fileType(forPaths paths: [String]) -> ClipboardItemType {

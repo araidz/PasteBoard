@@ -380,6 +380,28 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(m.items.first?.id, b.id)
     }
 
+    // Vision reads text from a rendered image, and that text becomes searchable.
+    func testOCRTextIsRecognizedAndSearchable() throws {
+        let image = NSImage(size: NSSize(width: 600, height: 120), flipped: false) { rect in
+            NSColor.white.setFill(); rect.fill()
+            ("Invoice 4821" as NSString).draw(at: NSPoint(x: 20, y: 30),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 56), .foregroundColor: NSColor.black])
+            return true
+        }
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+        let text = try XCTUnwrap(ClipboardManager.recognizeText(in: png))
+        XCTAssertTrue(text.contains("4821"), "recognized: \(text)")
+
+        let m = makeManager()
+        let img = ClipboardItem(id: UUID(), type: .image, textContent: nil, imagePath: "/tmp/x.png",
+                                filePaths: nil, timestamp: Date(), sourceApp: nil)
+        m.items = [img, textItem("unrelated")]
+        m.setOCRText(text, for: img.id)
+        m.searchText = "invoice"
+        XCTAssertEqual(m.filteredItems.map(\.id), [img.id])
+    }
+
     // ⌘Z restores the last deleted item at its original position; committing ends undo.
     func testUndoDeleteRestoresPosition() {
         let m = makeManager()

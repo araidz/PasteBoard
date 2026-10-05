@@ -44,6 +44,10 @@ struct PreviewOverlay: View {
         switch item.type {
         case .image:
             ImagePreview(path: item.imagePath)
+            if let ocr = item.ocrText {
+                Divider()
+                TextPreview(text: ocr).frame(maxHeight: 180)
+            }
         case .text:
             TextPreview(text: item.textContent ?? "")
         case .code:
