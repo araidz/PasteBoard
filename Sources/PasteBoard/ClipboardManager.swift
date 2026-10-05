@@ -95,6 +95,8 @@ class ClipboardManager: ObservableObject {
     // Mirrors the search field's focus state (set from HistoryView) so the
     // key monitor knows whether space/"/" should act as shortcuts or as text.
     @Published var isSearchFocused: Bool = false
+    // One-shot: the next clipboard change is not recorded (gear menu, before copying a secret).
+    @Published var ignoreNextCopy: Bool = false
     var isCaptureEnabled: Bool { historyKey != nil }
 
     private var lastChangeCount: Int = 0
@@ -242,11 +244,11 @@ class ClipboardManager: ObservableObject {
         return !ignoredPasteboardTypes.isDisjoint(with: types)
     }
 
-    func checkForChanges() {
+    func checkForChanges(_ pasteboard: NSPasteboard = .general) {
         guard historyKey != nil else { return }
-        let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
+        if ignoreNextCopy { ignoreNextCopy = false; return }
         guard !Self.shouldIgnore(types: pasteboard.types) else { return }
 
         let sourceApp = NSWorkspace.shared.frontmostApplication?.localizedName

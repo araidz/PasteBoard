@@ -1,4 +1,5 @@
 import Cocoa
+import Combine
 import SwiftUI
 import Carbon.HIToolbox
 import ServiceManagement
@@ -15,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dismissMonitor: Any?
     private var lastCloseTime = Date.distantPast   // guards the toggle against reopen-on-close
     private var lastOpenFromIcon = false            // icon click → center under icon; hotkey → at cursor
+    private var ignoreObserver: AnyCancellable?
 
     private let clipboardManager = ClipboardManager()
 
@@ -54,6 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startMonitoring()
         // Flash the menu-bar icon when something is captured.
         NotificationCenter.default.addObserver(self, selector: #selector(flashIcon), name: .clipboardDidCapture, object: nil)
+        // Slashed icon while "Ignore Next Copy" is armed. @Published fires before the
+        // value is stored, so render from the emitted value via the next runloop tick.
+        ignoreObserver = clipboardManager.$ignoreNextCopy.removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { self?.updateStatusIcon() }
+        }
         // Dismiss when the user clicks outside our window (global monitor only sees
         // clicks destined for OTHER apps, so clicks inside our window won't fire it).
         dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -107,8 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateStatusIcon(captured: Bool = false) {
         let disabled = !clipboardManager.isCaptureEnabled
-        let symbol = disabled ? "exclamationmark.triangle.fill" : (captured ? (isTestBuild ? "doc.on.clipboard" : "list.clipboard.fill") : (isTestBuild ? "doc.on.clipboard" : "list.clipboard"))
-        let description = disabled ? "PasteBoard capture disabled" : (captured ? "Captured" : "PasteBoard")
+        let ignoring = clipboardManager.ignoreNextCopy
+        let symbol = disabled ? "exclamationmark.triangle.fill" : ignoring ? "eye.slash" : (captured ? (isTestBuild ? "doc.on.clipboard" : "list.clipboard.fill") : (isTestBuild ? "doc.on.clipboard" : "list.clipboard"))
+        let description = disabled ? "PasteBoard capture disabled" : ignoring ? "Ignoring next copy" : (captured ? "Captured" : "PasteBoard")
         statusItem.button?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)
         statusItem.button?.toolTip = disabled ? "PasteBoard capture disabled: history unavailable" : "PasteBoard"
     }

@@ -84,6 +84,8 @@ struct HistoryView: View {
                 Text("⚠ Capture disabled — history unavailable")
                 Divider()
             }
+            Toggle("Ignore Next Copy", isOn: $manager.ignoreNextCopy)
+            Divider()
             Toggle("Launch at Login", isOn: Binding(get: isLaunchAtLogin, set: { _ in onToggleLaunchAtLogin() }))
             Toggle("Paste Directly Into App", isOn: $autoPasteEnabled)
             // Only offer the enable action while it's still needed; once granted, the row goes away.

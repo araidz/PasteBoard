@@ -380,6 +380,24 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(m.items.first?.id, b.id)
     }
 
+    // "Ignore Next Copy" skips exactly one clipboard change, then disarms.
+    func testIgnoreNextCopySkipsOneChange() {
+        let m = makeManager()
+        let pasteboard = NSPasteboard(name: .init("PasteBoardTests.\(UUID().uuidString)"))
+        m.ignoreNextCopy = true
+        pasteboard.clearContents()
+        pasteboard.setString("secret", forType: .string)
+        m.checkForChanges(pasteboard)
+        XCTAssertFalse(m.ignoreNextCopy)
+
+        let captured = expectation(forNotification: .clipboardDidCapture, object: nil)
+        pasteboard.clearContents()
+        pasteboard.setString("ordinary", forType: .string)
+        m.checkForChanges(pasteboard)
+        wait(for: [captured], timeout: 3)
+        XCTAssertEqual(m.items.map(\.textContent), ["ordinary"])
+    }
+
     // A copy repeating the newest entry (apps re-asserting the clipboard) is a no-op.
     func testReassertedTopCopyIsSkipped() {
         let m = makeManager()
