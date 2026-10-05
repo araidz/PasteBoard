@@ -246,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func closeWindow() {
         window?.orderOut(nil)
         lastCloseTime = Date()
+        clipboardManager.commitPendingDelete()   // undo lasts while the panel is open
     }
 
     // MARK: - Keyboard
@@ -267,6 +268,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return nil
                 case 51 where !self.clipboardManager.isSearchFocused:  // ⌫ — delete the highlighted row (pinned rows are protected)
                     if let item = self.clipboardManager.selectedItem { self.clipboardManager.deleteItem(item) }
+                    return nil
+                case 6 where !self.clipboardManager.isSearchFocused:   // Z — undo the last delete
+                    self.clipboardManager.undoDelete()
                     return nil
                 case 16:  // Y — toggle the full-content preview overlay
                     self.clipboardManager.togglePreview()

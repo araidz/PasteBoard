@@ -380,6 +380,45 @@ final class PasteBoardTests: XCTestCase {
         XCTAssertEqual(m.items.first?.id, b.id)
     }
 
+    // ⌘Z restores the last deleted item at its original position; committing ends undo.
+    func testUndoDeleteRestoresPosition() {
+        let m = makeManager()
+        let a = textItem("a"), b = textItem("b"), c = textItem("c")
+        m.items = [a, b, c]
+        m.deleteItem(b)
+        XCTAssertTrue(m.canUndoDelete)
+        m.undoDelete()
+        XCTAssertEqual(m.items.map(\.id), [a.id, b.id, c.id])
+        XCTAssertEqual(m.selectedItemID, b.id)
+        XCTAssertFalse(m.canUndoDelete)
+
+        m.deleteItem(c)
+        m.commitPendingDelete()
+        m.undoDelete()
+        XCTAssertEqual(m.items.map(\.id), [a.id, b.id])
+    }
+
+    // A deleted image's file survives until the delete is committed.
+    func testDeletedImageFileKeptUntilCommit() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let m = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+        let file = dir.appendingPathComponent("Images/x.png")
+        try Data("png".utf8).write(to: file)
+        let img = ClipboardItem(id: UUID(), type: .image, textContent: nil, imagePath: file.path,
+                                filePaths: nil, timestamp: Date(), sourceApp: nil)
+        m.items = [img]
+        m.deleteItem(img)
+        m.flush()   // drains ioQueue — and commits the delete
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+
+        try Data("png".utf8).write(to: file)
+        m.items = [img]
+        m.deleteItem(img)
+        m.undoDelete()
+        m.flush()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
     // "Ignore Next Copy" skips exactly one clipboard change, then disarms.
     func testIgnoreNextCopySkipsOneChange() {
         let m = makeManager()

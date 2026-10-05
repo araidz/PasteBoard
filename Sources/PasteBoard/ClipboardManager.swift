@@ -97,6 +97,9 @@ class ClipboardManager: ObservableObject {
     @Published var isSearchFocused: Bool = false
     // One-shot: the next clipboard change is not recorded (gear menu, before copying a secret).
     @Published var ignoreNextCopy: Bool = false
+    // The last deleted item and its index in `items`, restorable with ⌘Z until committed.
+    @Published private var pendingDelete: (item: ClipboardItem, index: Int)?
+    var canUndoDelete: Bool { pendingDelete != nil }
     var isCaptureEnabled: Bool { historyKey != nil }
 
     private var lastChangeCount: Int = 0
@@ -543,12 +546,40 @@ class ClipboardManager: ObservableObject {
                 selectedItemID = nil
             }
         }
+        commitPendingDelete()
+        if let index = items.firstIndex(where: { $0.id == item.id }) {
+            pendingDelete = (item, index)
+        }
         items.removeAll { $0.id == item.id }   // instant UI update
-        if let p = item.imagePath { removeFiles([p]) }
         saveItems()
     }
 
+    /// ⌘Z: put the last deleted item back where it was. Its image file is kept
+    /// on disk until the delete is committed, so the restore is lossless.
+    func undoDelete() {
+        guard let (item, index) = pendingDelete else { return }
+        pendingDelete = nil
+        if let existing = items.first(where: { isContentDuplicate($0, item) }) {
+            selectedItemID = existing.id   // re-copied meanwhile — nothing to restore
+            return
+        }
+        items.insert(item, at: min(index, items.count))
+        selectedItemID = item.id
+        saveItems()
+    }
+
+    /// Make the last delete permanent (panel close, next delete, quit): drop the
+    /// undo slot and remove its image unless a newer copy reuses the same file.
+    func commitPendingDelete() {
+        guard let (item, _) = pendingDelete else { return }
+        pendingDelete = nil
+        if let path = item.imagePath, !items.contains(where: { $0.imagePath == path }) {
+            removeFiles([path])
+        }
+    }
+
     func clearAll() {
+        commitPendingDelete()
         // Preserve pinned items; only clear the rolling history.
         let unpinned = items.filter { !$0.pinned }
         let imagePaths = unpinned.compactMap { $0.imagePath }
@@ -644,6 +675,7 @@ class ClipboardManager: ObservableObject {
     }
 
     func flush() {
+        commitPendingDelete()
         guard let historyKey else { return }
         let (pinned, unpinned) = partitioned()
         ioQueue.sync {

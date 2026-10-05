@@ -234,7 +234,11 @@ struct HistoryView: View {
         HStack(spacing: 9) {
             footerHint(symbol: "return", "paste")
             footerHint(keys: "⌘P", "pin")
-            footerHint(keys: "⌘⌫", "delete")
+            if manager.canUndoDelete {
+                footerHint(keys: "⌘Z", "undo")
+            } else {
+                footerHint(keys: "⌘⌫", "delete")
+            }
             Spacer()
             Button {
                 if confirmClear {
