@@ -88,3 +88,32 @@ enum EncryptedStore {
         return data
     }
 }
+
+/// Reads stored clipboard images. Images PasteBoard saves itself are AES-GCM
+/// sealed `.enc` files; anything else (legacy PNGs, image files the user
+/// copied) is read as-is.
+enum ImageVault {
+    static let fileExtension = "enc"
+
+    // ponytail: one process-wide key, set by ClipboardManager once its history
+    // loads, so thumbnail/preview code can decrypt without threading the manager
+    // through every view. Pass the key explicitly if the app ever runs two managers.
+    private static let lock = NSLock()
+    private static var storedKey: SymmetricKey?
+    static var key: SymmetricKey? {
+        get { lock.withLock { storedKey } }
+        set { lock.withLock { storedKey = newValue } }
+    }
+
+    static func isSealed(_ path: String) -> Bool {
+        (path as NSString).pathExtension == fileExtension
+    }
+
+    /// Plain image bytes for `path`; nil when unreadable or the key is missing/wrong.
+    static func data(atPath path: String) -> Data? {
+        guard let raw = FileManager.default.contents(atPath: path) else { return nil }
+        guard isSealed(path) else { return raw }
+        guard let key else { return nil }
+        return try? EncryptedStore.decrypt(raw, key: key)
+    }
+}

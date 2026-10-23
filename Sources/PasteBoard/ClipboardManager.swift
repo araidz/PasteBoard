@@ -24,7 +24,7 @@ struct ClipboardItem: Identifiable, Codable, Equatable {
     let id: UUID
     let type: ClipboardItemType
     let textContent: String?
-    let imagePath: String?
+    var imagePath: String?   // var: repointed when legacy PNGs are sealed
     let filePaths: [String]?
     let timestamp: Date
     let sourceApp: String?
@@ -238,7 +238,9 @@ class ClipboardManager: ObservableObject {
 
         if historyKey != nil {
             if loadItems() {
+                ImageVault.key = historyKey
                 cleanupOrphanedImages()
+                sealLegacyImages()
             } else {
                 // Never overwrite or clean up data that failed authentication/loading.
                 historyKey = nil
@@ -258,14 +260,31 @@ class ClipboardManager: ObservableObject {
         return !ignoredPasteboardTypes.isDisjoint(with: types)
     }
 
+    static let sourceType = NSPasteboard.PasteboardType("org.nspasteboard.source")
+
+    /// The copying app's name. Prefers the bundle id the app declared on the
+    /// pasteboard (nspasteboard.org convention) — the frontmost app is only a
+    /// guess, made up to one poll interval after the copy.
+    static func sourceAppName(for pasteboard: NSPasteboard) -> String? {
+        if let bundleID = pasteboard.string(forType: sourceType), !bundleID.isEmpty {
+            if let name = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first?.localizedName {
+                return name
+            }
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                return url.deletingPathExtension().lastPathComponent
+            }
+        }
+        return NSWorkspace.shared.frontmostApplication?.localizedName
+    }
+
     func checkForChanges(_ pasteboard: NSPasteboard = .general) {
-        guard historyKey != nil else { return }
+        guard let historyKey else { return }
         guard pasteboard.changeCount != lastChangeCount else { return }
         lastChangeCount = pasteboard.changeCount
         if ignoreNextCopy { ignoreNextCopy = false; return }
         guard !Self.shouldIgnore(types: pasteboard.types) else { return }
 
-        let sourceApp = NSWorkspace.shared.frontmostApplication?.localizedName
+        let sourceApp = Self.sourceAppName(for: pasteboard)
 
         // Check for files / directories first. The on-disk stat that classifies
         // file vs. folder runs off the main thread so a large copy can't stall the UI.
@@ -293,7 +312,9 @@ class ClipboardManager: ObservableObject {
             let maxSize = maxItemSizeBytes
             let pngSource = pasteboard.data(forType: .png)
             guard let imageData = pngSource ?? pasteboard.data(forType: .tiff) else { return }
-            guard imageData.count <= maxSize else { return }
+            // TIFF is uncompressed (a Retina screenshot is ~24 MB, ~3 MB as PNG), so
+            // it is size-checked after conversion below; the pixel cap bounds decoding.
+            if pngSource != nil, imageData.count > maxSize { return }
             ioQueue.async { [weak self] in
                 guard let self else { return }
                 guard Self.imageDimensionsAreSafe(imageData) else { return }
@@ -311,12 +332,13 @@ class ClipboardManager: ObservableObject {
                 guard pngData.count <= maxSize else { return }
                 // Content-addressed filename: identical image bytes map to the same
                 // path, so the path-based dedup in insert() collapses repeat copies
-                // (and the file write below becomes a no-op).
+                // (and the file write below becomes a no-op). The write is atomic:
+                // a torn file would otherwise be skipped as "existing" forever.
                 let imageID = SHA256.hash(data: pngData).map { String(format: "%02x", $0) }.joined()
-                let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).png")
+                let imagePath = self.imageStorageURL.appendingPathComponent("\(imageID).\(ImageVault.fileExtension)")
                 if !FileManager.default.fileExists(atPath: imagePath.path) {
                     do {
-                        try pngData.write(to: imagePath)
+                        try EncryptedStore.encrypt(pngData, key: historyKey).write(to: imagePath, options: .atomic)
                     } catch {
                         NSLog("PasteBoard: failed to write captured image — \(error.localizedDescription)")
                         return
@@ -539,7 +561,8 @@ class ClipboardManager: ObservableObject {
             }
             written = pasteboard.setString(text, forType: .string)
         case .image:
-            guard let path = item.imagePath, let image = NSImage(contentsOfFile: path) else { return false }
+            guard let path = item.imagePath, let data = ImageVault.data(atPath: path),
+                  let image = NSImage(data: data) else { return false }
             pasteboard.clearContents()
             written = pasteboard.writeObjects([image])
         case .file, .folder:
@@ -693,18 +716,65 @@ class ClipboardManager: ObservableObject {
         }
     }
 
+    /// Encrypts image PNGs saved before 2.12: writes a sealed copy of each,
+    /// repoints history at it, persists that, and only then deletes the plain
+    /// files — a crash at any step leaves every item with a readable image.
+    private func sealLegacyImages() {
+        guard let key = historyKey else { return }
+        let imageDir = imageStorageURL.standardizedFileURL.resolvingSymlinksInPath()
+        let legacy = Set(items.compactMap(\.imagePath).filter { path in
+            !ImageVault.isSealed(path)
+                && URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+                    .deletingLastPathComponent() == imageDir
+        })
+        guard !legacy.isEmpty else { return }
+        ioQueue.async {
+            var sealed: [String: String] = [:]
+            for path in legacy {
+                guard let data = FileManager.default.contents(atPath: path) else { continue }
+                let target = URL(fileURLWithPath: path).deletingPathExtension()
+                    .appendingPathExtension(ImageVault.fileExtension)
+                do {
+                    try EncryptedStore.encrypt(data, key: key).write(to: target, options: .atomic)
+                    sealed[path] = target.path
+                } catch {
+                    NSLog("PasteBoard: failed to encrypt stored image — \(error.localizedDescription)")
+                }
+            }
+            guard !sealed.isEmpty else { return }
+            DispatchQueue.main.async {
+                for index in self.items.indices {
+                    if let old = self.items[index].imagePath, let new = sealed[old] {
+                        self.items[index].imagePath = new
+                    }
+                }
+                let (pinned, unpinned) = self.partitioned()
+                self.ioQueue.async {
+                    // This snapshot is newer than any queued save, so it supersedes it.
+                    self.pendingSave?.cancel()
+                    self.pendingSave = nil
+                    guard self.writeAll(pinned: pinned, unpinned: unpinned, key: key) else { return }
+                    for old in sealed.keys { try? FileManager.default.removeItem(atPath: old) }
+                }
+            }
+        }
+    }
+
     // MARK: - Persistence
 
     /// Encode + encrypt + write both files. Runs on ioQueue; strong `self` is
     /// deliberate so an in-flight write completes even during teardown.
-    private func writeAll(pinned: [ClipboardItem], unpinned: [ClipboardItem], key: SymmetricKey) {
+    @discardableResult
+    private func writeAll(pinned: [ClipboardItem], unpinned: [ClipboardItem], key: SymmetricKey) -> Bool {
         do {
             try EncryptedStore.encrypt(JSONEncoder().encode(unpinned), key: key)
                 .write(to: storageURL, options: .atomic)
             try EncryptedStore.encrypt(JSONEncoder().encode(pinned), key: key)
                 .write(to: pinnedStorageURL, options: .atomic)
+            return true
         } catch {
             NSLog("PasteBoard: failed to persist history — \(error.localizedDescription)")
+            return false
         }
     }
 

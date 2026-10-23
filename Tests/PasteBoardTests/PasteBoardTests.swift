@@ -544,7 +544,7 @@ final class PasteBoardTests: XCTestCase {
         try "not-an-image".data(using: .utf8)!.write(to: orphan)
 
         // Create a referenced image file.
-        let referenced = imageDir.appendingPathComponent("referenced.png")
+        let referenced = imageDir.appendingPathComponent("referenced.\(ImageVault.fileExtension)")
         try "also-not-an-image".data(using: .utf8)!.write(to: referenced)
 
         // Pre-write a history file that references only "referenced" so that
@@ -620,5 +620,80 @@ final class PasteBoardTests: XCTestCase {
 
         XCTAssertEqual(try Data(contentsOf: history), original)
         XCTAssertTrue(FileManager.default.fileExists(atPath: image.path))
+    }
+
+    // MARK: - Image encryption, TIFF sizing, source app
+
+    private static let pngMagic = Data([0x89, 0x50, 0x4E, 0x47])
+
+    /// A flat-colour image: tiny as PNG, ~1 MB as uncompressed TIFF.
+    private func solidImage() throws -> (tiff: Data, png: Data) {
+        let image = NSImage(size: NSSize(width: 600, height: 400), flipped: false) { rect in
+            NSColor.systemTeal.setFill(); rect.fill(); return true
+        }
+        let tiff = try XCTUnwrap(image.tiffRepresentation)
+        let png = try XCTUnwrap(NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]))
+        return (tiff, png)
+    }
+
+    /// Captures and legacy sealing hop through background queues back to main.
+    private func waitUntil(_ condition: () -> Bool, file: StaticString = #filePath, line: UInt = #line) {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        XCTAssertTrue(condition(), "timed out", file: file, line: line)
+    }
+
+    // A TIFF-only copy larger than the item cap is kept when its PNG fits, is
+    // stored encrypted, credits the declared source app, and still pastes.
+    func testTiffCaptureIsSizedAsPNGEncryptedAndAttributed() throws {
+        let (tiff, _) = try solidImage()
+        let m = makeManager()
+        m.maxItemSizeBytes = 100_000
+        XCTAssertGreaterThan(tiff.count, m.maxItemSizeBytes)
+
+        let source = NSPasteboard(name: .init("PasteBoardTests.\(UUID().uuidString)"))
+        source.clearContents()
+        source.setData(tiff, forType: .tiff)
+        source.setString("com.apple.finder", forType: ClipboardManager.sourceType)
+        m.checkForChanges(source)
+        waitUntil { !m.items.isEmpty }
+
+        let item = try XCTUnwrap(m.items.first)
+        XCTAssertEqual(item.type, .image)
+        XCTAssertEqual(item.sourceApp, "Finder")
+        let path = try XCTUnwrap(item.imagePath)
+        XCTAssertTrue(ImageVault.isSealed(path))
+        XCTAssertNotEqual(try Data(contentsOf: URL(fileURLWithPath: path)).prefix(4), Self.pngMagic, "stored encrypted")
+        XCTAssertEqual(ImageVault.data(atPath: path)?.prefix(4), Self.pngMagic, "decrypts to PNG")
+        XCTAssertNotNil(downsampleImage(path: path, maxPixelSize: 64))
+
+        let target = NSPasteboard(name: .init("PasteBoardTests.\(UUID().uuidString)"))
+        XCTAssertTrue(m.pasteItem(item, to: target))
+        XCTAssertNotNil(NSImage(pasteboard: target))
+    }
+
+    // PNGs saved by earlier versions are sealed on launch, history is repointed,
+    // the plain file is removed, and the image survives a reload.
+    func testLegacyPNGsAreSealedOnLaunch() throws {
+        let (_, png) = try solidImage()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let images = dir.appendingPathComponent("Images")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        let legacy = images.appendingPathComponent("legacy.png")
+        try png.write(to: legacy)
+        let item = ClipboardItem(id: UUID(), type: .image, textContent: nil, imagePath: legacy.path,
+                                 filePaths: nil, timestamp: Date(), sourceApp: nil)
+        try JSONEncoder().encode([item]).write(to: dir.appendingPathComponent("history.json"))
+
+        let m = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+        waitUntil { !FileManager.default.fileExists(atPath: legacy.path) }
+        let sealedPath = try XCTUnwrap(m.items.first?.imagePath)
+        XCTAssertTrue(ImageVault.isSealed(sealedPath))
+
+        let reloaded = ClipboardManager(baseDirectory: dir, defaults: isolatedDefaults(), keyProvider: { Self.ephemeralKey })
+        XCTAssertEqual(reloaded.items.first?.imagePath, sealedPath)
+        XCTAssertEqual(ImageVault.data(atPath: sealedPath), png)
     }
 }

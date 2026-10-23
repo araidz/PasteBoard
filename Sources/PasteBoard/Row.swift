@@ -5,8 +5,10 @@ import UniformTypeIdentifiers
 
 // ponytail: shared downsample — avoids duplicating the CGImageSource boilerplate
 func downsampleImage(path: String, maxPixelSize: Int) -> NSImage? {
-    let url = URL(fileURLWithPath: path)
-    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    let source = ImageVault.isSealed(path)
+        ? ImageVault.data(atPath: path).flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }
+        : CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)
+    guard let source else { return nil }
     let options: [CFString: Any] = [
         kCGImageSourceCreateThumbnailFromImageAlways: true,
         kCGImageSourceCreateThumbnailWithTransform: true,
