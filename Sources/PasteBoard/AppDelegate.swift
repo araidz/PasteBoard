@@ -49,8 +49,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Clicking the menu-bar icon toggles the panel; all settings live in the
         // in-panel gear menu.
-        statusItem.button?.action = #selector(iconClicked)
-        statusItem.button?.target = self
+        if #available(macOS 27.0, *) {
+            // The system drives click/highlight via an expanded-interface session (see extension below).
+            statusItem.expandedInterfaceDelegate = self
+        } else {
+            statusItem.button?.action = #selector(iconClicked)
+            statusItem.button?.target = self
+        }
 
         installKeyMonitor()
         startMonitoring()
@@ -246,6 +251,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func closeWindow() {
         window?.orderOut(nil)
+        if #available(macOS 27.0, *) { statusItem.expandedInterfaceSession?.cancel() }
         lastCloseTime = Date()
         clipboardManager.commitPendingDelete()   // undo lasts while the panel is open
     }
@@ -382,4 +388,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 final class FloatingPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+// macOS 27: the system highlights the icon for as long as an expanded-interface session lives.
+@available(macOS 27.0, *)
+extension AppDelegate: NSStatusItemExpandedInterfaceDelegate {
+    func statusItem(_ statusItem: NSStatusItem, didBegin session: NSStatusItemExpandedInterfaceSession) {
+        lastOpenFromIcon = true
+        openWindow()
+    }
+
+    func statusItemDidEndExpandedInterfaceSession(_ statusItem: NSStatusItem, animated: Bool) {
+        if window?.isVisible == true { closeWindow() }
+    }
 }
